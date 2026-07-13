@@ -8,5 +8,5 @@ class Artist:
     youtube_url: str
     channel_id: str
     channel_name: str
+    avatar_url: str | None = None
     created_at: str | None = None
-

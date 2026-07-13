@@ -7,6 +7,7 @@ from config import DOWNLOADS_DIR, MP3_QUALITY_KBPS
 from database.song_repository import SongRepository
 from models.artist import Artist
 from models.video import Video
+from services.thumbnail_service import ThumbnailService
 from utils.filename import build_mp3_filename, build_song_name
 
 
@@ -14,8 +15,13 @@ ProgressCallback = Callable[[str, str], None]
 
 
 class DownloadService:
-    def __init__(self, song_repository: SongRepository | None = None) -> None:
+    def __init__(
+        self,
+        song_repository: SongRepository | None = None,
+        thumbnail_service: ThumbnailService | None = None,
+    ) -> None:
         self.song_repository = song_repository or SongRepository()
+        self.thumbnail_service = thumbnail_service or ThumbnailService()
 
     def download_video(
         self, artist: Artist, video: Video, progress_callback: ProgressCallback
@@ -63,6 +69,8 @@ class DownloadService:
                     candidates[0].replace(final_path)
             if not final_path.exists():
                 raise RuntimeError("下載完成後找不到 MP3 檔案。")
+            self.thumbnail_service.get_thumbnail(video.youtube_video_id, video.thumbnail_url)
+            self.thumbnail_service.get_channel_avatar(artist.channel_id, artist.avatar_url)
             self.song_repository.save_downloaded_song(
                 artist_id=artist.artist_id,
                 video=video,
@@ -75,4 +83,3 @@ class DownloadService:
         except Exception as exc:
             progress_callback(video.youtube_video_id, f"失敗：{exc}")
             return False
-

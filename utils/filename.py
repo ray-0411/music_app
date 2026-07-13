@@ -15,10 +15,19 @@ def sanitize_filename_stem(value: str, max_length: int = MAX_FILENAME_STEM_LENGT
     return cleaned or "untitled"
 
 
+def strip_artist_prefix(artist_id: str, value: str) -> str:
+    prefix = f"{artist_id}_"
+    cleaned = value.strip()
+    while cleaned.lower().startswith(prefix.lower()):
+        cleaned = cleaned[len(prefix):].strip()
+    return cleaned
+
+
 def build_song_name(artist_id: str, title: str) -> str:
-    return sanitize_filename_stem(f"{artist_id}_{title}")
+    return sanitize_filename_stem(strip_artist_prefix(artist_id, title))
 
 
 def build_mp3_filename(artist_id: str, title: str) -> str:
-    return f"{build_song_name(artist_id, title)}.mp3"
-
+    song_name = build_song_name(artist_id, title)
+    file_stem = sanitize_filename_stem(f"{artist_id}_{song_name}")
+    return f"{file_stem}.mp3"

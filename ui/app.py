@@ -1,6 +1,6 @@
 import customtkinter as ctk
 
-from config import APP_FONT_FAMILY, CACHE_DIR, DOWNLOADS_DIR, THUMBNAIL_CACHE_DIR
+from config import APP_FONT_FAMILY, CACHE_DIR, CHANNEL_AVATAR_CACHE_DIR, DOWNLOADS_DIR, THUMBNAIL_CACHE_DIR
 from database.artist_repository import ArtistRepository
 from database.song_repository import SongRepository
 from services.download_service import DownloadService
@@ -26,12 +26,13 @@ class App(ctk.CTk):
         DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         THUMBNAIL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        CHANNEL_AVATAR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
         self.artist_repository = ArtistRepository()
         self.song_repository = SongRepository()
         self.youtube_service = YouTubeService()
         self.thumbnail_service = ThumbnailService()
-        self.download_service = DownloadService(self.song_repository)
+        self.download_service = DownloadService(self.song_repository, self.thumbnail_service)
         self.song_service = SongService(self.song_repository)
 
         self.tabs = ctk.CTkTabview(self)
@@ -53,8 +54,10 @@ class App(ctk.CTk):
 
         self.song_management_view = SongManagementView(
             self.song_tab,
+            artist_repository=self.artist_repository,
             song_repository=self.song_repository,
             song_service=self.song_service,
+            thumbnail_service=self.thumbnail_service,
         )
         self.song_management_view.pack(fill="both", expand=True)
 
@@ -62,6 +65,7 @@ class App(ctk.CTk):
             self.artist_tab,
             artist_repository=self.artist_repository,
             youtube_service=self.youtube_service,
+            thumbnail_service=self.thumbnail_service,
             on_artists_changed=self._artists_changed,
         )
         self.artist_view.pack(fill="both", expand=True)

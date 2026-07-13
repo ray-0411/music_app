@@ -1,7 +1,7 @@
 from database.connection import get_connection
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def initialize_database() -> None:
@@ -22,6 +22,7 @@ def initialize_database() -> None:
                 youtube_url TEXT NOT NULL,
                 channel_id TEXT NOT NULL UNIQUE,
                 channel_name TEXT NOT NULL,
+                avatar_url TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -51,6 +52,7 @@ def initialize_database() -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_songs_artist_id ON songs(artist_id)"
         )
+        _ensure_column(connection, "artists", "avatar_url", "TEXT")
         connection.execute(
             """
             INSERT OR REPLACE INTO schema_meta (key, value)
@@ -59,3 +61,10 @@ def initialize_database() -> None:
             (str(SCHEMA_VERSION),),
         )
 
+
+def _ensure_column(connection, table_name: str, column_name: str, column_type: str) -> None:
+    columns = {
+        row["name"] for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    if column_name not in columns:
+        connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")

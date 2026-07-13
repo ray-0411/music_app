@@ -4,7 +4,7 @@ from functools import partial
 import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageTk
 
-from config import THUMBNAIL_SIZE, THUMBNAIL_WORKERS, VIDEO_BATCH_SIZE, VIDEO_PAGE_SIZE
+from config import APP_FONT_FAMILY, THUMBNAIL_SIZE, THUMBNAIL_WORKERS, VIDEO_BATCH_SIZE, VIDEO_PAGE_SIZE
 from database.artist_repository import ArtistRepository
 from database.song_repository import SongRepository
 from models.artist import Artist
@@ -35,6 +35,7 @@ class VideoView(ctk.CTkFrame):
         self.on_downloads_changed = on_downloads_changed
         self.worker_executor = ThreadPoolExecutor(max_workers=2)
         self.thumbnail_executor = ThreadPoolExecutor(max_workers=THUMBNAIL_WORKERS)
+        self.detail_executor = ThreadPoolExecutor(max_workers=4)
 
         self.artists: list[Artist] = []
         self.selected_artist: Artist | None = None
@@ -42,11 +43,16 @@ class VideoView(ctk.CTkFrame):
         self.filtered_videos: list[Video] = []
         self.current_page = 0
         self.total_count: int | None = None
+        self.count_loading = False
         self.has_more = False
         self.loading_more = False
+        self.count_loading = False
         self.selected: dict[str, ctk.BooleanVar] = {}
         self.rows: dict[str, dict] = {}
+        self.details_requested: set[str] = set()
         self.default_thumbnail = self._make_default_thumbnail()
+        self.font = ctk.CTkFont(family=APP_FONT_FAMILY, size=13)
+        self.title_font = ctk.CTkFont(family=APP_FONT_FAMILY, size=14, weight="bold")
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -56,32 +62,32 @@ class VideoView(ctk.CTkFrame):
         toolbar.grid_columnconfigure(1, weight=1)
         toolbar.grid_columnconfigure(3, weight=1)
 
-        ctk.CTkLabel(toolbar, text="歌手").grid(row=0, column=0, padx=(12, 6), pady=12)
-        self.artist_menu = ctk.CTkOptionMenu(toolbar, values=["尚無歌手"], command=self._artist_selected)
+        ctk.CTkLabel(toolbar, text="歌手", font=self.font).grid(row=0, column=0, padx=(12, 6), pady=12)
+        self.artist_menu = ctk.CTkOptionMenu(toolbar, values=["尚無歌手"], command=self._artist_selected, font=self.font)
         self.artist_menu.grid(row=0, column=1, sticky="ew", padx=6, pady=12)
 
-        self.refresh_button = ctk.CTkButton(toolbar, text="取得 / 重新整理影片", command=self.load_videos)
+        self.refresh_button = ctk.CTkButton(toolbar, text="取得 / 重新整理影片", command=self.load_videos, font=self.font)
         self.refresh_button.grid(row=0, column=2, padx=6, pady=12)
 
-        self.search_entry = ctk.CTkEntry(toolbar, placeholder_text="搜尋影片標題")
+        self.search_entry = ctk.CTkEntry(toolbar, placeholder_text="搜尋影片標題", font=self.font)
         self.search_entry.grid(row=0, column=3, sticky="ew", padx=6, pady=12)
         self.search_entry.bind("<KeyRelease>", lambda _event: self.apply_filter())
 
         actions = ctk.CTkFrame(self)
         actions.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
-        self.select_all_button = ctk.CTkButton(actions, text="全選", width=88, command=self.select_all)
+        self.select_all_button = ctk.CTkButton(actions, text="全選", width=88, command=self.select_all, font=self.font)
         self.select_all_button.pack(side="left", padx=(12, 6), pady=10)
-        self.clear_button = ctk.CTkButton(actions, text="取消全選", width=88, command=self.clear_selection)
+        self.clear_button = ctk.CTkButton(actions, text="取消全選", width=88, command=self.clear_selection, font=self.font)
         self.clear_button.pack(side="left", padx=6, pady=10)
-        self.download_button = ctk.CTkButton(actions, text="批次下載", width=110, command=self.download_selected)
+        self.download_button = ctk.CTkButton(actions, text="批次下載", width=110, command=self.download_selected, font=self.font)
         self.download_button.pack(side="left", padx=6, pady=10)
-        self.prev_button = ctk.CTkButton(actions, text="上一頁", width=88, command=self.prev_page)
+        self.prev_button = ctk.CTkButton(actions, text="上一頁", width=88, command=self.prev_page, font=self.font)
         self.prev_button.pack(side="left", padx=6, pady=10)
-        self.next_button = ctk.CTkButton(actions, text="下一頁", width=88, command=self.next_page)
+        self.next_button = ctk.CTkButton(actions, text="下一頁", width=88, command=self.next_page, font=self.font)
         self.next_button.pack(side="left", padx=6, pady=10)
-        self.page_label = ctk.CTkLabel(actions, text="第 0 / 0 頁")
+        self.page_label = ctk.CTkLabel(actions, text="第 0 / 0 頁", font=self.font)
         self.page_label.pack(side="left", padx=6, pady=10)
-        self.status_label = ctk.CTkLabel(actions, text="", anchor="w")
+        self.status_label = ctk.CTkLabel(actions, text="", anchor="w", font=self.font)
         self.status_label.pack(side="left", fill="x", expand=True, padx=12, pady=10)
 
         self.video_list = ctk.CTkScrollableFrame(self)
@@ -157,14 +163,19 @@ class VideoView(ctk.CTkFrame):
             self.videos.extend(video for video in videos if video.youtube_video_id not in existing_ids)
         else:
             self.videos = videos
-        self.total_count = result.total_count
+        if result.total_count is not None:
+            self.total_count = result.total_count
         self.has_more = result.limited
         self.apply_filter()
         total_text = f" / 頻道共約 {self.total_count} 部" if self.total_count else ""
+        if self.total_count is None:
+            total_text = " / 頻道影片總數：未知"
         notice = f"已載入 {len(self.videos)} 部影片{total_text}。"
         if self.has_more:
             notice += " 接近最後一頁時會自動載入下一批。"
         self.set_status(notice)
+        if not append:
+            self._load_total_count_async()
 
     def apply_filter(self) -> None:
         query = self.search_entry.get().strip().lower()
@@ -182,7 +193,7 @@ class VideoView(ctk.CTkFrame):
         self.selected.clear()
         if not self.filtered_videos:
             self.page_label.configure(text="第 0 / 0 頁")
-            ctk.CTkLabel(self.video_list, text="尚無影片資料", anchor="w").grid(
+            ctk.CTkLabel(self.video_list, text="尚無影片資料", anchor="w", font=self.font).grid(
                 row=0, column=0, sticky="ew", padx=8, pady=8
             )
             return
@@ -196,6 +207,7 @@ class VideoView(ctk.CTkFrame):
         for row_index, video in enumerate(page_videos):
             self._render_video_row(row_index, video)
         self._maybe_load_next_batch()
+        self._load_visible_video_details(page_videos)
 
     def page_count(self) -> int:
         if not self.filtered_videos:
@@ -234,6 +246,28 @@ class VideoView(ctk.CTkFrame):
         )
         future.add_done_callback(lambda done: self.after(0, self._handle_videos_loaded, done, True))
 
+    def _load_total_count_async(self) -> None:
+        if self.selected_artist is None or self.count_loading:
+            return
+        self.count_loading = True
+        artist = self.selected_artist
+        future = self.worker_executor.submit(
+            self.youtube_service.count_channel_videos, artist.youtube_url
+        )
+        future.add_done_callback(lambda done: self.after(0, self._handle_total_count_loaded, done))
+
+    def _handle_total_count_loaded(self, future) -> None:
+        self.count_loading = False
+        try:
+            count = future.result()
+        except Exception:
+            count = None
+        if count is None:
+            self.set_status(f"已載入 {len(self.videos)} 部影片 / 頻道影片總數：未知。")
+            return
+        self.total_count = count
+        self.set_status(f"已載入 {len(self.videos)} 部影片 / 頻道影片總數：約 {count:,} 部。")
+
     def _render_video_row(self, row_index: int, video: Video) -> None:
         frame = ctk.CTkFrame(self.video_list)
         frame.grid(row=row_index, column=0, sticky="ew", padx=6, pady=6)
@@ -250,22 +284,54 @@ class VideoView(ctk.CTkFrame):
         thumbnail_label = ctk.CTkLabel(frame, image=self.default_thumbnail, text="")
         thumbnail_label.grid(row=0, column=1, rowspan=2, padx=6, pady=10)
 
-        title = ctk.CTkLabel(frame, text=video.title, anchor="w", justify="left", wraplength=560)
+        title = ctk.CTkLabel(frame, text=video.title, anchor="w", justify="left", wraplength=560, font=self.title_font)
         title.grid(row=0, column=2, sticky="ew", padx=8, pady=(10, 2))
         meta = self._video_meta(video)
-        ctk.CTkLabel(frame, text=meta, anchor="w", justify="left").grid(
+        meta_label = ctk.CTkLabel(frame, text=meta, anchor="w", justify="left", font=self.font)
+        meta_label.grid(
             row=1, column=2, sticky="ew", padx=8, pady=(2, 10)
         )
 
-        status = ctk.CTkLabel(frame, text=self._status_text(video), width=130, anchor="e")
+        status = ctk.CTkLabel(frame, text=self._status_text(video), width=130, anchor="e", font=self.font)
         status.grid(row=0, column=3, rowspan=2, sticky="e", padx=12, pady=10)
         self.rows[video.youtube_video_id] = {
             "status": status,
             "checkbox": checkbox,
             "thumbnail": thumbnail_label,
             "thumbnail_image": self.default_thumbnail,
+            "meta": meta_label,
         }
         self._load_thumbnail_async(video)
+
+    def _load_visible_video_details(self, videos: list[Video]) -> None:
+        for video in videos:
+            if video.youtube_video_id in self.details_requested:
+                continue
+            if video.upload_date and video.view_count is not None:
+                continue
+            self.details_requested.add(video.youtube_video_id)
+            future = self.detail_executor.submit(self.youtube_service.get_video_details, video)
+            future.add_done_callback(
+                lambda done, video_id=video.youtube_video_id: self.after(
+                    0, self._handle_video_details_loaded, video_id, done
+                )
+            )
+
+    def _handle_video_details_loaded(self, video_id: str, future) -> None:
+        try:
+            detailed = future.result()
+        except Exception:
+            return
+        self.videos = [
+            detailed if video.youtube_video_id == video_id else video for video in self.videos
+        ]
+        self.filtered_videos = [
+            detailed if video.youtube_video_id == video_id else video for video in self.filtered_videos
+        ]
+        row = self.rows.get(video_id)
+        if row:
+            row["meta"].configure(text=self._video_meta(detailed))
+            row["status"].configure(text=self._status_text(detailed))
 
     def _load_thumbnail_async(self, video: Video) -> None:
         future = self.thumbnail_executor.submit(
@@ -354,8 +420,12 @@ class VideoView(ctk.CTkFrame):
 
     def _video_meta(self, video: Video) -> str:
         duration = self._format_duration(video.duration)
-        upload_date = video.upload_date or "未知日期"
-        return f"ID: {video.youtube_video_id} | 長度: {duration} | 上傳: {upload_date}\n{video.youtube_url}"
+        upload_date = self._format_upload_date(video.upload_date)
+        view_count = self._format_view_count(video.view_count)
+        return (
+            f"ID: {video.youtube_video_id} | 長度: {duration} | 上傳: {upload_date} | 觀看: {view_count}\n"
+            f"{video.youtube_url}"
+        )
 
     def _status_text(self, video: Video) -> str:
         if video.file_missing:
@@ -372,6 +442,18 @@ class VideoView(ctk.CTkFrame):
         if hours:
             return f"{hours}:{minutes:02d}:{seconds:02d}"
         return f"{minutes}:{seconds:02d}"
+
+    def _format_upload_date(self, upload_date: str | None) -> str:
+        if not upload_date:
+            return "未知"
+        if len(upload_date) == 8 and upload_date.isdigit():
+            return f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
+        return upload_date
+
+    def _format_view_count(self, view_count: int | None) -> str:
+        if view_count is None:
+            return "未知"
+        return f"{view_count:,}"
 
     def _artist_label(self, artist: Artist) -> str:
         return f"{artist.artist_id} - {artist.channel_name}"
@@ -390,4 +472,5 @@ class VideoView(ctk.CTkFrame):
     def destroy(self) -> None:
         self.worker_executor.shutdown(wait=False, cancel_futures=True)
         self.thumbnail_executor.shutdown(wait=False, cancel_futures=True)
+        self.detail_executor.shutdown(wait=False, cancel_futures=True)
         super().destroy()

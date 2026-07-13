@@ -147,6 +147,7 @@ class SongRepository:
                     thumbnail_url=video.thumbnail_url,
                     duration=video.duration,
                     upload_date=video.upload_date,
+                    view_count=video.view_count,
                     download_status=status,
                     is_downloaded=song.download_status == "downloaded" and not file_missing,
                     file_missing=file_missing,

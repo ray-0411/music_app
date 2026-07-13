@@ -12,6 +12,8 @@ class ChannelInfo:
     channel_id: str
     channel_name: str
     channel_url: str
+    avatar_url: str | None = None
+    video_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -38,9 +40,10 @@ class YouTubeService:
         channel_id = info.get("channel_id") or info.get("id") or info.get("uploader_id")
         channel_name = info.get("channel") or info.get("uploader") or info.get("title")
         channel_url = info.get("channel_url") or info.get("webpage_url") or url
+        avatar_url = self._best_thumbnail_url(info)
         if not channel_id or not channel_name:
             raise RuntimeError("無法從此網址取得 YouTube channel ID 或頻道名稱。")
-        return ChannelInfo(url, channel_id, channel_name, channel_url)
+        return ChannelInfo(url, channel_id, channel_name, channel_url, avatar_url, None)
 
     def list_channel_videos(
         self, channel_url: str, start: int = 0, limit: int = VIDEO_BATCH_SIZE
@@ -68,6 +71,25 @@ class YouTubeService:
         videos = [self._entry_to_video(entry) for entry in entries[:limit]]
         return VideoListResult(videos=videos, limited=limited, total_count=total_count)
 
+    def count_channel_videos(self, channel_url: str) -> int | None:
+        videos_url = self._videos_url(channel_url)
+        options = {
+            "quiet": True,
+            "skip_download": True,
+            "extract_flat": "in_playlist",
+            "ignoreerrors": True,
+        }
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(videos_url, download=False)
+        except Exception:
+            return None
+        entries = [entry for entry in info.get("entries", []) if entry]
+        if entries:
+            return len(entries)
+        count = info.get("playlist_count")
+        return count if isinstance(count, int) else None
+
     def _entry_to_video(self, entry: dict) -> Video:
         video_id = entry.get("id")
         url = entry.get("url") or entry.get("webpage_url")
@@ -75,10 +97,7 @@ class YouTubeService:
             youtube_url = url
         else:
             youtube_url = f"https://www.youtube.com/watch?v={video_id}"
-        thumbnail_url = entry.get("thumbnail")
-        thumbnails = entry.get("thumbnails") or []
-        if not thumbnail_url and thumbnails:
-            thumbnail_url = thumbnails[-1].get("url")
+        thumbnail_url = self._best_thumbnail_url(entry)
         return Video(
             youtube_video_id=video_id,
             youtube_url=youtube_url,
@@ -86,6 +105,31 @@ class YouTubeService:
             thumbnail_url=thumbnail_url,
             duration=entry.get("duration"),
             upload_date=entry.get("upload_date"),
+            view_count=entry.get("view_count"),
+        )
+
+    def get_video_details(self, video: Video) -> Video:
+        options = {
+            "quiet": True,
+            "skip_download": True,
+            "noplaylist": True,
+        }
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(video.youtube_url, download=False)
+        except Exception:
+            return video
+        return Video(
+            youtube_video_id=video.youtube_video_id,
+            youtube_url=video.youtube_url,
+            title=info.get("title") or video.title,
+            thumbnail_url=self._best_thumbnail_url(info) or video.thumbnail_url,
+            duration=info.get("duration") or video.duration,
+            upload_date=info.get("upload_date") or video.upload_date,
+            view_count=info.get("view_count") or video.view_count,
+            download_status=video.download_status,
+            is_downloaded=video.is_downloaded,
+            file_missing=video.file_missing,
         )
 
     def _videos_url(self, channel_url: str) -> str:
@@ -93,3 +137,10 @@ class YouTubeService:
         if clean.endswith("/videos"):
             return clean
         return f"{clean}/videos"
+
+    def _best_thumbnail_url(self, info: dict) -> str | None:
+        thumbnail_url = info.get("thumbnail")
+        thumbnails = info.get("thumbnails") or []
+        if thumbnails:
+            thumbnail_url = thumbnails[-1].get("url") or thumbnail_url
+        return thumbnail_url
