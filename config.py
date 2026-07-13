@@ -1,0 +1,16 @@
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+DOWNLOADS_DIR = BASE_DIR / "downloads"
+CACHE_DIR = BASE_DIR / "cache"
+THUMBNAIL_CACHE_DIR = CACHE_DIR / "thumbnails"
+DB_PATH = DATA_DIR / "app.db"
+
+MAX_VIDEOS_PER_CHANNEL = 50
+VIDEO_BATCH_SIZE = 100
+VIDEO_PAGE_SIZE = 20
+MP3_QUALITY_KBPS = "192"
+THUMBNAIL_SIZE = (160, 90)
+THUMBNAIL_WORKERS = 4
+APP_FONT_FAMILY = "Microsoft JhengHei UI"
