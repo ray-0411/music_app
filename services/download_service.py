@@ -28,6 +28,7 @@ class DownloadService:
     ) -> bool:
         existing = self.song_repository.get_by_video_id(video.youtube_video_id)
         if existing and Path(existing.file_path).exists():
+            self.song_repository.update_video_metadata(video)
             progress_callback(video.youtube_video_id, "已下載，略過")
             return False
 
@@ -69,7 +70,7 @@ class DownloadService:
                     candidates[0].replace(final_path)
             if not final_path.exists():
                 raise RuntimeError("下載完成後找不到 MP3 檔案。")
-            self.thumbnail_service.get_thumbnail(video.youtube_video_id, video.thumbnail_url)
+            self.thumbnail_service.get_song_thumbnail(video.youtube_video_id, video.thumbnail_url)
             self.thumbnail_service.get_channel_avatar(artist.channel_id, artist.avatar_url)
             self.song_repository.save_downloaded_song(
                 artist_id=artist.artist_id,

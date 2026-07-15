@@ -2,7 +2,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 import customtkinter as ctk
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageDraw
 
 from config import APP_FONT_FAMILY, DOWNLOADS_DIR, THUMBNAIL_SIZE
 from database.artist_repository import ArtistRepository
@@ -10,6 +10,7 @@ from database.song_repository import SongRepository
 from models.song import Song
 from services.song_service import SongService
 from services.thumbnail_service import ThumbnailService
+from ui.fonts import base_font, button_font
 from utils.filename import build_song_name
 
 
@@ -30,19 +31,21 @@ class SongManagementView(ctk.CTkFrame):
         self.thumbnail_service = thumbnail_service
         self.song_entries: dict[int, ctk.CTkEntry] = {}
         self.thumbnail_labels: dict[str, ctk.CTkLabel] = {}
-        self.thumbnail_images: dict[str, ImageTk.PhotoImage] = {}
+        self.thumbnail_images: dict[str, ctk.CTkImage] = {}
         self.thumbnail_requests: set[str] = set()
         self.thumbnail_executor = ThreadPoolExecutor(max_workers=4)
         self.default_thumbnail = self._make_default_thumbnail()
+        self.is_destroyed = False
         self.editing_song_id: int | None = None
-        self.font = ctk.CTkFont(family=APP_FONT_FAMILY, size=13)
+        self.font = base_font()
+        self.button_font = button_font()
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
         toolbar = ctk.CTkFrame(self)
         toolbar.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
-        self.refresh_button = ctk.CTkButton(toolbar, text="重新整理", command=self.reload_songs, font=self.font)
+        self.refresh_button = ctk.CTkButton(toolbar, text="重新整理", command=self.reload_songs, font=self.button_font)
         self.refresh_button.pack(side="left", padx=12, pady=10)
         self.status_label = ctk.CTkLabel(toolbar, text="", anchor="w", font=self.font)
         self.status_label.pack(side="left", fill="x", expand=True, padx=12, pady=10)
@@ -83,7 +86,13 @@ class SongManagementView(ctk.CTkFrame):
         if song.youtube_video_id in self.thumbnail_images:
             thumb_label.configure(image=self.thumbnail_images[song.youtube_video_id])
         else:
-            self._load_song_thumbnail_async(song)
+            image = self.thumbnail_service.get_existing_song_thumbnail(song.youtube_video_id)
+            if image is not None:
+                photo = ctk.CTkImage(light_image=image, dark_image=image, size=THUMBNAIL_SIZE)
+                self.thumbnail_images[song.youtube_video_id] = photo
+                thumb_label.configure(image=photo)
+            else:
+                self._load_song_thumbnail_async(song)
 
         status = self._song_status(song)
         artist_name = artist_names.get(song.artist_id.lower(), song.artist_id)
@@ -102,14 +111,14 @@ class SongManagementView(ctk.CTkFrame):
                 text="儲存",
                 width=72,
                 command=lambda song_id=song.id: self.rename_song(song_id),
-                font=self.font,
+                font=self.button_font,
             ).grid(row=0, column=3, padx=4, pady=10)
             ctk.CTkButton(
                 frame,
                 text="取消",
                 width=72,
                 command=self.cancel_edit,
-                font=self.font,
+                font=self.button_font,
             ).grid(row=0, column=4, padx=(4, 10), pady=10)
         else:
             ctk.CTkLabel(frame, text=self._display_song_name(song), anchor="w", font=self.font).grid(
@@ -120,7 +129,7 @@ class SongManagementView(ctk.CTkFrame):
                 text="編輯",
                 width=72,
                 command=lambda song_id=song.id: self.start_edit(song_id),
-                font=self.font,
+                font=self.button_font,
             ).grid(row=0, column=3, padx=(6, 10), pady=10)
 
         detail = (
@@ -133,30 +142,34 @@ class SongManagementView(ctk.CTkFrame):
         )
 
     def _load_song_thumbnail_async(self, song: Song) -> None:
-        if song.youtube_video_id in self.thumbnail_requests:
+        if (
+            song.youtube_video_id in self.thumbnail_requests
+            and song.youtube_video_id not in self.thumbnail_images
+        ):
             return
         self.thumbnail_requests.add(song.youtube_video_id)
         future = self.thumbnail_executor.submit(
-            self.thumbnail_service.get_thumbnail, song.youtube_video_id, song.thumbnail_url
+            self.thumbnail_service.get_song_thumbnail, song.youtube_video_id, song.thumbnail_url
         )
         future.add_done_callback(
-            lambda done, video_id=song.youtube_video_id: self.after(
-                0, self._handle_thumbnail_loaded, video_id, done
+            lambda done, video_id=song.youtube_video_id: self._safe_after(
+                self._handle_thumbnail_loaded, video_id, done
             )
         )
 
     def _handle_thumbnail_loaded(self, video_id: str, future) -> None:
-        label = self.thumbnail_labels.get(video_id)
-        if label is None:
-            return
         try:
             image = future.result()
         except Exception:
             image = None
         if image is None:
+            self.thumbnail_requests.discard(video_id)
             return
-        photo = ImageTk.PhotoImage(image)
+        photo = ctk.CTkImage(light_image=image, dark_image=image, size=THUMBNAIL_SIZE)
         self.thumbnail_images[video_id] = photo
+        label = self.thumbnail_labels.get(video_id)
+        if label is None:
+            return
         label.configure(image=photo)
 
     def start_edit(self, song_id: int | None) -> None:
@@ -212,8 +225,17 @@ class SongManagementView(ctk.CTkFrame):
         draw = ImageDraw.Draw(image)
         draw.rectangle((0, 0, THUMBNAIL_SIZE[0] - 1, THUMBNAIL_SIZE[1] - 1), outline="#8d96a8")
         draw.text((44, 36), "No Image", fill="#4a5568")
-        return ImageTk.PhotoImage(image)
+        return ctk.CTkImage(light_image=image, dark_image=image, size=THUMBNAIL_SIZE)
+
+    def _safe_after(self, callback, *args) -> None:
+        if self.is_destroyed:
+            return
+        try:
+            self.after(0, callback, *args)
+        except Exception:
+            return
 
     def destroy(self) -> None:
+        self.is_destroyed = True
         self.thumbnail_executor.shutdown(wait=False, cancel_futures=True)
         super().destroy()

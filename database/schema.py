@@ -1,7 +1,7 @@
 from database.connection import get_connection
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def initialize_database() -> None:
@@ -52,7 +52,59 @@ def initialize_database() -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_songs_artist_id ON songs(artist_id)"
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tag_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_available INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tag_options (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                is_available INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (category_id) REFERENCES tag_categories(id)
+                    ON UPDATE CASCADE ON DELETE CASCADE,
+                UNIQUE(category_id, name)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS artist_tags (
+                artist_id TEXT NOT NULL COLLATE NOCASE,
+                category_id INTEGER NOT NULL,
+                option_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (artist_id, option_id),
+                FOREIGN KEY (artist_id) REFERENCES artists(artist_id)
+                    ON UPDATE CASCADE ON DELETE CASCADE,
+                FOREIGN KEY (category_id) REFERENCES tag_categories(id)
+                    ON UPDATE CASCADE ON DELETE CASCADE,
+                FOREIGN KEY (option_id) REFERENCES tag_options(id)
+                    ON UPDATE CASCADE ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_artist_tags_artist_id ON artist_tags(artist_id)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tag_options_category_id ON tag_options(category_id)"
+        )
         _ensure_column(connection, "artists", "avatar_url", "TEXT")
+        _ensure_column(connection, "songs", "duration", "INTEGER")
+        _ensure_column(connection, "songs", "upload_date", "TEXT")
+        _seed_default_tag_categories(connection)
         connection.execute(
             """
             INSERT OR REPLACE INTO schema_meta (key, value)
@@ -68,3 +120,15 @@ def _ensure_column(connection, table_name: str, column_name: str, column_type: s
     }
     if column_name not in columns:
         connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+
+def _seed_default_tag_categories(connection) -> None:
+    defaults = ["性別", "團體", "類型", "其他"]
+    for index, name in enumerate(defaults):
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO tag_categories (name, sort_order)
+            VALUES (?, ?)
+            """,
+            (name, index),
+        )

@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
 import customtkinter as ctk
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageDraw
 
 from config import APP_FONT_FAMILY, THUMBNAIL_SIZE, THUMBNAIL_WORKERS, VIDEO_BATCH_SIZE, VIDEO_PAGE_SIZE
 from database.artist_repository import ArtistRepository
@@ -12,6 +12,7 @@ from models.video import Video
 from services.download_service import DownloadService
 from services.thumbnail_service import ThumbnailService
 from services.youtube_service import YouTubeService
+from ui.fonts import base_font, button_font, small_title_font
 
 
 class VideoView(ctk.CTkFrame):
@@ -51,8 +52,10 @@ class VideoView(ctk.CTkFrame):
         self.rows: dict[str, dict] = {}
         self.details_requested: set[str] = set()
         self.default_thumbnail = self._make_default_thumbnail()
-        self.font = ctk.CTkFont(family=APP_FONT_FAMILY, size=13)
-        self.title_font = ctk.CTkFont(family=APP_FONT_FAMILY, size=14, weight="bold")
+        self.is_destroyed = False
+        self.font = base_font()
+        self.button_font = button_font()
+        self.title_font = small_title_font()
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -66,7 +69,7 @@ class VideoView(ctk.CTkFrame):
         self.artist_menu = ctk.CTkOptionMenu(toolbar, values=["尚無歌手"], command=self._artist_selected, font=self.font)
         self.artist_menu.grid(row=0, column=1, sticky="ew", padx=6, pady=12)
 
-        self.refresh_button = ctk.CTkButton(toolbar, text="取得 / 重新整理影片", command=self.load_videos, font=self.font)
+        self.refresh_button = ctk.CTkButton(toolbar, text="取得 / 重新整理影片", command=self.load_videos, font=self.button_font)
         self.refresh_button.grid(row=0, column=2, padx=6, pady=12)
 
         self.search_entry = ctk.CTkEntry(toolbar, placeholder_text="搜尋影片標題", font=self.font)
@@ -75,15 +78,15 @@ class VideoView(ctk.CTkFrame):
 
         actions = ctk.CTkFrame(self)
         actions.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
-        self.select_all_button = ctk.CTkButton(actions, text="全選", width=88, command=self.select_all, font=self.font)
+        self.select_all_button = ctk.CTkButton(actions, text="全選", width=88, command=self.select_all, font=self.button_font)
         self.select_all_button.pack(side="left", padx=(12, 6), pady=10)
-        self.clear_button = ctk.CTkButton(actions, text="取消全選", width=88, command=self.clear_selection, font=self.font)
+        self.clear_button = ctk.CTkButton(actions, text="取消全選", width=88, command=self.clear_selection, font=self.button_font)
         self.clear_button.pack(side="left", padx=6, pady=10)
-        self.download_button = ctk.CTkButton(actions, text="批次下載", width=110, command=self.download_selected, font=self.font)
+        self.download_button = ctk.CTkButton(actions, text="批次下載", width=110, command=self.download_selected, font=self.button_font)
         self.download_button.pack(side="left", padx=6, pady=10)
-        self.prev_button = ctk.CTkButton(actions, text="上一頁", width=88, command=self.prev_page, font=self.font)
+        self.prev_button = ctk.CTkButton(actions, text="上一頁", width=88, command=self.prev_page, font=self.button_font)
         self.prev_button.pack(side="left", padx=6, pady=10)
-        self.next_button = ctk.CTkButton(actions, text="下一頁", width=88, command=self.next_page, font=self.font)
+        self.next_button = ctk.CTkButton(actions, text="下一頁", width=88, command=self.next_page, font=self.button_font)
         self.next_button.pack(side="left", padx=6, pady=10)
         self.page_label = ctk.CTkLabel(actions, text="第 0 / 0 頁", font=self.font)
         self.page_label.pack(side="left", padx=6, pady=10)
@@ -141,7 +144,7 @@ class VideoView(ctk.CTkFrame):
         future = self.worker_executor.submit(
             self._load_videos_worker, self.selected_artist, 0
         )
-        future.add_done_callback(lambda done: self.after(0, self._handle_videos_loaded, done, False))
+        future.add_done_callback(lambda done: self._safe_after(self._handle_videos_loaded, done, False))
 
     def _load_videos_worker(self, artist: Artist, start: int):
         result = self.youtube_service.list_channel_videos(
@@ -244,7 +247,7 @@ class VideoView(ctk.CTkFrame):
         future = self.worker_executor.submit(
             self._load_videos_worker, self.selected_artist, start
         )
-        future.add_done_callback(lambda done: self.after(0, self._handle_videos_loaded, done, True))
+        future.add_done_callback(lambda done: self._safe_after(self._handle_videos_loaded, done, True))
 
     def _load_total_count_async(self) -> None:
         if self.selected_artist is None or self.count_loading:
@@ -254,7 +257,7 @@ class VideoView(ctk.CTkFrame):
         future = self.worker_executor.submit(
             self.youtube_service.count_channel_videos, artist.youtube_url
         )
-        future.add_done_callback(lambda done: self.after(0, self._handle_total_count_loaded, done))
+        future.add_done_callback(lambda done: self._safe_after(self._handle_total_count_loaded, done))
 
     def _handle_total_count_loaded(self, future) -> None:
         self.count_loading = False
@@ -312,8 +315,8 @@ class VideoView(ctk.CTkFrame):
             self.details_requested.add(video.youtube_video_id)
             future = self.detail_executor.submit(self.youtube_service.get_video_details, video)
             future.add_done_callback(
-                lambda done, video_id=video.youtube_video_id: self.after(
-                    0, self._handle_video_details_loaded, video_id, done
+                lambda done, video_id=video.youtube_video_id: self._safe_after(
+                    self._handle_video_details_loaded, video_id, done
                 )
             )
 
@@ -340,7 +343,9 @@ class VideoView(ctk.CTkFrame):
             video.thumbnail_url,
         )
         future.add_done_callback(
-            lambda done: self.after(0, partial(self._handle_thumbnail_loaded, video.youtube_video_id, done))
+            lambda done: self._safe_after(
+                partial(self._handle_thumbnail_loaded, video.youtube_video_id, done)
+            )
         )
 
     def _handle_thumbnail_loaded(self, video_id: str, future) -> None:
@@ -353,7 +358,7 @@ class VideoView(ctk.CTkFrame):
             image = None
         if image is None:
             return
-        photo = ImageTk.PhotoImage(image)
+        photo = ctk.CTkImage(light_image=image, dark_image=image, size=THUMBNAIL_SIZE)
         row["thumbnail_image"] = photo
         row["thumbnail"].configure(image=photo)
 
@@ -383,7 +388,7 @@ class VideoView(ctk.CTkFrame):
         self.download_button.configure(state="disabled")
         self.set_status(f"開始批次下載 {len(videos)} 部影片...")
         future = self.worker_executor.submit(self._download_worker, self.selected_artist, videos)
-        future.add_done_callback(lambda done: self.after(0, self._handle_download_finished, done))
+        future.add_done_callback(lambda done: self._safe_after(self._handle_download_finished, done))
 
     def _download_worker(self, artist: Artist, videos: list[Video]):
         success = 0
@@ -397,7 +402,7 @@ class VideoView(ctk.CTkFrame):
         return success, failed
 
     def _threadsafe_status(self, video_id: str, status: str) -> None:
-        self.after(0, self._set_video_status, video_id, status)
+        self._safe_after(self._set_video_status, video_id, status)
 
     def _set_video_status(self, video_id: str, status: str) -> None:
         row = self.rows.get(video_id)
@@ -463,14 +468,23 @@ class VideoView(ctk.CTkFrame):
         draw = ImageDraw.Draw(image)
         draw.rectangle((0, 0, THUMBNAIL_SIZE[0] - 1, THUMBNAIL_SIZE[1] - 1), outline="#8d96a8")
         draw.text((44, 36), "No Image", fill="#4a5568")
-        return ImageTk.PhotoImage(image)
+        return ctk.CTkImage(light_image=image, dark_image=image, size=THUMBNAIL_SIZE)
 
     def set_status(self, text: str, *, error: bool = False) -> None:
         color = "#b3261e" if error else "#1b6e3c"
         self.status_label.configure(text=text, text_color=color)
 
     def destroy(self) -> None:
+        self.is_destroyed = True
         self.worker_executor.shutdown(wait=False, cancel_futures=True)
         self.thumbnail_executor.shutdown(wait=False, cancel_futures=True)
         self.detail_executor.shutdown(wait=False, cancel_futures=True)
         super().destroy()
+
+    def _safe_after(self, callback, *args) -> None:
+        if self.is_destroyed:
+            return
+        try:
+            self.after(0, callback, *args)
+        except Exception:
+            return

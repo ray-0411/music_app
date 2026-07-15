@@ -98,6 +98,12 @@ class SongRepository:
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'downloaded', CURRENT_TIMESTAMP)
                 ON CONFLICT(youtube_video_id) DO UPDATE SET
+                    artist_id = excluded.artist_id,
+                    youtube_url = excluded.youtube_url,
+                    original_title = excluded.original_title,
+                    thumbnail_url = excluded.thumbnail_url,
+                    duration = excluded.duration,
+                    upload_date = excluded.upload_date,
                     download_status = excluded.download_status,
                     file_name = excluded.file_name,
                     file_path = excluded.file_path,
@@ -128,6 +134,28 @@ class SongRepository:
                 (video.youtube_video_id,),
             ).fetchone()
         return _row_to_song(row)
+
+    def update_video_metadata(self, video: Video) -> None:
+        with get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE songs
+                SET youtube_url = ?,
+                    original_title = ?,
+                    thumbnail_url = ?,
+                    duration = ?,
+                    upload_date = ?
+                WHERE youtube_video_id = ?
+                """,
+                (
+                    video.youtube_url,
+                    video.title,
+                    video.thumbnail_url,
+                    video.duration,
+                    video.upload_date,
+                    video.youtube_video_id,
+                ),
+            )
 
     def mark_video_states(self, artist_id: str, videos: list[Video]) -> list[Video]:
         songs = self.downloaded_video_ids_for_artist(artist_id)
