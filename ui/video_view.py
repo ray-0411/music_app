@@ -92,12 +92,18 @@ class VideoView(ctk.CTkFrame):
         self.next_button.pack(side="left", padx=6, pady=10)
         self.page_label = ctk.CTkLabel(actions, text="第 0 / 0 頁", font=self.font)
         self.page_label.pack(side="left", padx=6, pady=10)
-        self.status_label = ctk.CTkLabel(actions, text="", anchor="w", font=self.font)
-        self.status_label.pack(side="left", fill="x", expand=True, padx=12, pady=10)
-
         self.video_list = ctk.CTkScrollableFrame(self)
         self.video_list.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.video_list.grid_columnconfigure(0, weight=1)
+
+        status_frame = ctk.CTkFrame(self)
+        status_frame.grid(row=3, column=0, sticky="ew", padx=8, pady=(0, 8))
+        status_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(status_frame, text="進度", anchor="w", font=self.font).grid(
+            row=0, column=0, sticky="w", padx=(12, 8), pady=10
+        )
+        self.status_label = ctk.CTkLabel(status_frame, text="", anchor="w", font=self.font)
+        self.status_label.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=10)
 
         self.reload_artists()
 
@@ -194,6 +200,7 @@ class VideoView(ctk.CTkFrame):
     def render_videos(self) -> None:
         for child in self.video_list.winfo_children():
             child.destroy()
+        self._scroll_video_list_to_top()
         self.rows.clear()
         self.selected.clear()
         if not self.filtered_videos:
@@ -213,6 +220,12 @@ class VideoView(ctk.CTkFrame):
             self._render_video_row(row_index, video)
         self._maybe_load_next_batch()
         self._load_visible_video_details(page_videos)
+
+    def _scroll_video_list_to_top(self) -> None:
+        try:
+            self.video_list._parent_canvas.yview_moveto(0)
+        except Exception:
+            pass
 
     def page_count(self) -> int:
         if not self.filtered_videos:
@@ -360,7 +373,11 @@ class VideoView(ctk.CTkFrame):
             image = None
         if image is None:
             return
-        photo = ctk.CTkImage(light_image=image, dark_image=image, size=THUMBNAIL_SIZE)
+        photo = ctk.CTkImage(
+            light_image=image,
+            dark_image=image,
+            size=self._fit_image_size(image.size, THUMBNAIL_SIZE),
+        )
         row["thumbnail_image"] = photo
         row["thumbnail"].configure(image=photo)
 
@@ -388,19 +405,22 @@ class VideoView(ctk.CTkFrame):
             self.set_status("沒有可下載的勾選影片。", error=True)
             return
         self.download_button.configure(state="disabled")
-        self.set_status(f"開始批次下載 {len(videos)} 部影片...")
+        self.set_status(f"下載進度：0/{len(videos)}")
         future = self.worker_executor.submit(self._download_worker, self.selected_artist, videos)
         future.add_done_callback(lambda done: self._safe_after(self._handle_download_finished, done))
 
     def _download_worker(self, artist: Artist, videos: list[Video]):
         success = 0
         failed = 0
-        for video in videos:
+        total = len(videos)
+        for index, video in enumerate(videos, start=1):
+            self._threadsafe_status(video.youtube_video_id, f"下載進度：{index - 1}/{total}，處理中")
             ok = self.download_service.download_video(artist, video, self._threadsafe_status)
             if ok:
                 success += 1
             else:
                 failed += 1
+            self._safe_after(self.set_status, f"下載進度：{index}/{total}")
         return success, failed
 
     def _threadsafe_status(self, video_id: str, status: str) -> None:
@@ -410,6 +430,8 @@ class VideoView(ctk.CTkFrame):
         row = self.rows.get(video_id)
         if row:
             row["status"].configure(text=status)
+        if status.startswith("下載進度："):
+            self.set_status(status)
 
     def _handle_download_finished(self, future) -> None:
         self.download_button.configure(state="normal")
@@ -471,6 +493,14 @@ class VideoView(ctk.CTkFrame):
         draw.rectangle((0, 0, THUMBNAIL_SIZE[0] - 1, THUMBNAIL_SIZE[1] - 1), outline="#8d96a8")
         draw.text((44, 36), "No Image", fill="#4a5568")
         return ctk.CTkImage(light_image=image, dark_image=image, size=THUMBNAIL_SIZE)
+
+    def _fit_image_size(self, image_size: tuple[int, int], max_size: tuple[int, int]) -> tuple[int, int]:
+        width, height = image_size
+        max_width, max_height = max_size
+        if width <= 0 or height <= 0:
+            return max_size
+        scale = min(max_width / width, max_height / height)
+        return (max(1, int(width * scale)), max(1, int(height * scale)))
 
     def set_status(self, text: str, *, error: bool = False) -> None:
         color = "#b3261e" if error else "#1b6e3c"

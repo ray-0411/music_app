@@ -6,6 +6,7 @@ venv/
 
 data/*.db
 data/*.db-*
+data/settings.json
 downloads/
 assets/
 cache/

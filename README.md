@@ -28,6 +28,16 @@ winget install Gyan.FFmpeg
 
 或手動下載 FFmpeg，將 `bin` 目錄加入系統 `PATH`。
 
+## VLC
+
+音樂播放器使用 `python-vlc` 控制本機 MP3 播放。除了 Python 套件外，也需要安裝 VLC 桌面版。
+
+```powershell
+winget install VideoLAN.VLC
+```
+
+如果播放器頁顯示找不到 VLC，請確認 VLC 已安裝，並重新開啟程式。
+
 ## 執行
 
 ```powershell
@@ -70,6 +80,10 @@ python main.py
 - 歌手標籤支援雙層結構，例如 `性別 -> 女`。
 - 歌手編輯頁可以對每個分類多選下層標籤。
 - 停用標籤採假刪除，資料會保留在 SQLite 中。
+- 新增「音樂播放器」首頁，可順序播放已下載 MP3。
+- 播放器支援播放/暫停、上一首、下一首與拖曳時間條跳轉。
+- 播放器左側顯示上一首、本首、下一首。
+- 播放器預留標籤偏好設定區與評分區。
 
 ## 專案結構
 
@@ -95,7 +109,7 @@ assets/songs/
 
 - 目前使用 yt-dlp 作為 YouTube metadata 與下載來源。
 - Shorts、直播存檔、播放清單尚未實作。
-- 內建播放器暫時延後。
+- 內建播放器需要 VLC 桌面版與 `python-vlc`。
 - 自訂歌手 ID 暫時不可修改。
 - 字體預設使用微軟正黑體。
 - `cache/` 可刪除；刪除後只會讓影片列表暫存圖片重新下載，不影響 SQLite、MP3 或已保存的歌手/歌曲圖片。
