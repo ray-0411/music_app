@@ -74,7 +74,9 @@ class VideoView(ctk.CTkFrame):
 
         self.search_entry = ctk.CTkEntry(toolbar, placeholder_text="搜尋影片標題", font=self.font)
         self.search_entry.grid(row=0, column=3, sticky="ew", padx=6, pady=12)
-        self.search_entry.bind("<KeyRelease>", lambda _event: self.apply_filter())
+        self.search_entry.bind("<Return>", lambda _event: self.apply_filter())
+        self.search_button = ctk.CTkButton(toolbar, text="搜尋", width=84, command=self.apply_filter, font=self.button_font)
+        self.search_button.grid(row=0, column=4, padx=(0, 12), pady=12)
 
         actions = ctk.CTkFrame(self)
         actions.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))

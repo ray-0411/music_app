@@ -24,13 +24,29 @@ def _row_to_option(row: sqlite3.Row) -> TagOption:
 
 
 class TagRepository:
+    def __init__(self, scope: str = "artist") -> None:
+        if scope == "artist":
+            self.category_table = "tag_categories"
+            self.option_table = "tag_options"
+            self.assignment_table = "artist_tags"
+            self.assignment_target_column = "artist_id"
+            self.assignment_label = "歌手"
+        elif scope == "song":
+            self.category_table = "song_tag_categories"
+            self.option_table = "song_tag_options"
+            self.assignment_table = "song_tags"
+            self.assignment_target_column = "song_id"
+            self.assignment_label = "歌曲"
+        else:
+            raise ValueError("標籤類型不正確。")
+
     def list_categories(self, *, include_unavailable: bool = False) -> list[TagCategory]:
         where = "" if include_unavailable else "WHERE is_available = 1"
         with get_connection() as connection:
             rows = connection.execute(
                 f"""
                 SELECT id, name, sort_order, is_available
-                FROM tag_categories
+                FROM {self.category_table}
                 {where}
                 ORDER BY sort_order, id
                 """
@@ -47,7 +63,7 @@ class TagRepository:
             rows = connection.execute(
                 f"""
                 SELECT id, category_id, name, sort_order, is_available
-                FROM tag_options
+                FROM {self.option_table}
                 WHERE {where}
                 ORDER BY sort_order, id
                 """,
@@ -64,9 +80,9 @@ class TagRepository:
     def list_unavailable_categories(self) -> list[TagCategory]:
         with get_connection() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT id, name, sort_order, is_available
-                FROM tag_categories
+                FROM {self.category_table}
                 WHERE is_available = 0
                 ORDER BY sort_order, id
                 """
@@ -76,14 +92,14 @@ class TagRepository:
     def list_unavailable_options(self) -> list[tuple[TagOption, str]]:
         with get_connection() as connection:
             rows = connection.execute(
-                """
-                SELECT tag_options.id, tag_options.category_id, tag_options.name,
-                       tag_options.sort_order, tag_options.is_available,
-                       tag_categories.name AS category_name
-                FROM tag_options
-                JOIN tag_categories ON tag_categories.id = tag_options.category_id
-                WHERE tag_options.is_available = 0
-                ORDER BY tag_categories.sort_order, tag_options.sort_order, tag_options.id
+                f"""
+                SELECT {self.option_table}.id, {self.option_table}.category_id, {self.option_table}.name,
+                       {self.option_table}.sort_order, {self.option_table}.is_available,
+                       {self.category_table}.name AS category_name
+                FROM {self.option_table}
+                JOIN {self.category_table} ON {self.category_table}.id = {self.option_table}.category_id
+                WHERE {self.option_table}.is_available = 0
+                ORDER BY {self.category_table}.sort_order, {self.option_table}.sort_order, {self.option_table}.id
                 """
             ).fetchall()
         return [(_row_to_option(row), row["category_name"]) for row in rows]
@@ -95,19 +111,19 @@ class TagRepository:
         try:
             with get_connection() as connection:
                 max_sort = connection.execute(
-                    "SELECT COALESCE(MAX(sort_order), -1) FROM tag_categories"
+                    f"SELECT COALESCE(MAX(sort_order), -1) FROM {self.category_table}"
                 ).fetchone()[0]
                 cursor = connection.execute(
-                    """
-                    INSERT INTO tag_categories (name, sort_order)
+                    f"""
+                    INSERT INTO {self.category_table} (name, sort_order)
                     VALUES (?, ?)
                     """,
                     (cleaned, max_sort + 1),
                 )
                 row = connection.execute(
-                    """
+                    f"""
                     SELECT id, name, sort_order, is_available
-                    FROM tag_categories
+                    FROM {self.category_table}
                     WHERE id = ?
                     """,
                     (cursor.lastrowid,),
@@ -123,8 +139,8 @@ class TagRepository:
         try:
             with get_connection() as connection:
                 category = connection.execute(
-                    """
-                    SELECT id FROM tag_categories
+                    f"""
+                    SELECT id FROM {self.category_table}
                     WHERE id = ? AND is_available = 1
                     """,
                     (category_id,),
@@ -132,24 +148,24 @@ class TagRepository:
                 if category is None:
                     raise ValueError("找不到可用的上層標籤。")
                 max_sort = connection.execute(
-                    """
+                    f"""
                     SELECT COALESCE(MAX(sort_order), -1)
-                    FROM tag_options
+                    FROM {self.option_table}
                     WHERE category_id = ?
                     """,
                     (category_id,),
                 ).fetchone()[0]
                 cursor = connection.execute(
-                    """
-                    INSERT INTO tag_options (category_id, name, sort_order)
+                    f"""
+                    INSERT INTO {self.option_table} (category_id, name, sort_order)
                     VALUES (?, ?, ?)
                     """,
                     (category_id, cleaned, max_sort + 1),
                 )
                 row = connection.execute(
-                    """
+                    f"""
                     SELECT id, category_id, name, sort_order, is_available
-                    FROM tag_options
+                    FROM {self.option_table}
                     WHERE id = ?
                     """,
                     (cursor.lastrowid,),
@@ -161,14 +177,14 @@ class TagRepository:
     def set_category_available(self, category_id: int, is_available: bool) -> None:
         with get_connection() as connection:
             connection.execute(
-                "UPDATE tag_categories SET is_available = ? WHERE id = ?",
+                f"UPDATE {self.category_table} SET is_available = ? WHERE id = ?",
                 (1 if is_available else 0, category_id),
             )
 
     def set_option_available(self, option_id: int, is_available: bool) -> None:
         with get_connection() as connection:
             connection.execute(
-                "UPDATE tag_options SET is_available = ? WHERE id = ?",
+                f"UPDATE {self.option_table} SET is_available = ? WHERE id = ?",
                 (1 if is_available else 0, option_id),
             )
 
@@ -177,9 +193,9 @@ class TagRepository:
             raise ValueError("排序方向不正確。")
         with get_connection() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT id
-                FROM tag_categories
+                FROM {self.category_table}
                 WHERE is_available = 1
                 ORDER BY sort_order, id
                 """
@@ -194,7 +210,7 @@ class TagRepository:
             ids[index], ids[target_index] = ids[target_index], ids[index]
             for sort_order, current_id in enumerate(ids):
                 connection.execute(
-                    "UPDATE tag_categories SET sort_order = ? WHERE id = ?",
+                    f"UPDATE {self.category_table} SET sort_order = ? WHERE id = ?",
                     (sort_order, current_id),
                 )
         return True
@@ -204,9 +220,9 @@ class TagRepository:
             raise ValueError("排序方向不正確。")
         with get_connection() as connection:
             option = connection.execute(
-                """
+                f"""
                 SELECT category_id
-                FROM tag_options
+                FROM {self.option_table}
                 WHERE id = ? AND is_available = 1
                 """,
                 (option_id,),
@@ -214,9 +230,9 @@ class TagRepository:
             if option is None:
                 raise ValueError("找不到可排序的下層標籤。")
             rows = connection.execute(
-                """
+                f"""
                 SELECT id
-                FROM tag_options
+                FROM {self.option_table}
                 WHERE category_id = ? AND is_available = 1
                 ORDER BY sort_order, id
                 """,
@@ -230,7 +246,7 @@ class TagRepository:
             ids[index], ids[target_index] = ids[target_index], ids[index]
             for sort_order, current_id in enumerate(ids):
                 connection.execute(
-                    "UPDATE tag_options SET sort_order = ? WHERE id = ?",
+                    f"UPDATE {self.option_table} SET sort_order = ? WHERE id = ?",
                     (sort_order, current_id),
                 )
         return True
@@ -238,9 +254,9 @@ class TagRepository:
     def category_usage_count(self, category_id: int) -> int:
         with get_connection() as connection:
             return connection.execute(
-                """
+                f"""
                 SELECT COUNT(*)
-                FROM artist_tags
+                FROM {self.assignment_table}
                 WHERE category_id = ?
                 """,
                 (category_id,),
@@ -249,9 +265,9 @@ class TagRepository:
     def option_usage_count(self, option_id: int) -> int:
         with get_connection() as connection:
             return connection.execute(
-                """
+                f"""
                 SELECT COUNT(*)
-                FROM artist_tags
+                FROM {self.assignment_table}
                 WHERE option_id = ?
                 """,
                 (option_id,),
@@ -260,16 +276,16 @@ class TagRepository:
     def delete_category_if_unused(self, category_id: int) -> None:
         usage_count = self.category_usage_count(category_id)
         if usage_count:
-            raise ValueError(f"此上層標籤仍有 {usage_count} 筆歌手使用紀錄，不能刪除。")
+            raise ValueError(f"此上層標籤仍有 {usage_count} 筆{self.assignment_label}使用紀錄，不能刪除。")
         with get_connection() as connection:
-            connection.execute("DELETE FROM tag_categories WHERE id = ?", (category_id,))
+            connection.execute(f"DELETE FROM {self.category_table} WHERE id = ?", (category_id,))
 
     def delete_option_if_unused(self, option_id: int) -> None:
         usage_count = self.option_usage_count(option_id)
         if usage_count:
-            raise ValueError(f"此下層標籤仍有 {usage_count} 筆歌手使用紀錄，不能刪除。")
+            raise ValueError(f"此下層標籤仍有 {usage_count} 筆{self.assignment_label}使用紀錄，不能刪除。")
         with get_connection() as connection:
-            connection.execute("DELETE FROM tag_options WHERE id = ?", (option_id,))
+            connection.execute(f"DELETE FROM {self.option_table} WHERE id = ?", (option_id,))
 
     def get_artist_option_ids(self, artist_id: str) -> set[int]:
         with get_connection() as connection:
@@ -283,6 +299,18 @@ class TagRepository:
             ).fetchall()
         return {row["option_id"] for row in rows}
 
+    def get_song_option_ids(self, song_id: int) -> set[int]:
+        with get_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT option_id
+                FROM song_tags
+                WHERE song_id = ?
+                """,
+                (song_id,),
+            ).fetchall()
+        return {row["option_id"] for row in rows}
+
     def replace_artist_tags(self, artist_id: str, option_ids: set[int]) -> None:
         with get_connection() as connection:
             connection.execute(
@@ -291,9 +319,9 @@ class TagRepository:
             )
             for option_id in option_ids:
                 row = connection.execute(
-                    """
+                    f"""
                     SELECT category_id
-                    FROM tag_options
+                    FROM {self.option_table}
                     WHERE id = ? AND is_available = 1
                     """,
                     (option_id,),
@@ -306,4 +334,26 @@ class TagRepository:
                     VALUES (?, ?, ?)
                     """,
                     (artist_id, row["category_id"], option_id),
+                )
+
+    def replace_song_tags(self, song_id: int, option_ids: set[int]) -> None:
+        with get_connection() as connection:
+            connection.execute("DELETE FROM song_tags WHERE song_id = ?", (song_id,))
+            for option_id in option_ids:
+                row = connection.execute(
+                    """
+                    SELECT category_id
+                    FROM song_tag_options
+                    WHERE id = ? AND is_available = 1
+                    """,
+                    (option_id,),
+                ).fetchone()
+                if row is None:
+                    continue
+                connection.execute(
+                    """
+                    INSERT INTO song_tags (song_id, category_id, option_id)
+                    VALUES (?, ?, ?)
+                    """,
+                    (song_id, row["category_id"], option_id),
                 )

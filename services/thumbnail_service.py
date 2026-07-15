@@ -30,6 +30,14 @@ class ThumbnailService:
             fallback_dirs=[LEGACY_CHANNEL_AVATAR_DIR],
         )
 
+    def get_existing_channel_avatar(self, channel_id: str) -> Image.Image | None:
+        return self._get_existing_cached_image(
+            ARTIST_IMAGE_DIR,
+            channel_id,
+            CHANNEL_AVATAR_SIZE,
+            fallback_dirs=[LEGACY_CHANNEL_AVATAR_DIR],
+        )
+
     def get_song_thumbnail(self, video_id: str, url: str | None) -> Image.Image | None:
         return self._get_cached_image(
             SONG_IMAGE_DIR,

@@ -46,6 +46,7 @@ class ArtistView(ctk.CTkFrame):
         self.editing_artist_id: str | None = None
         self.preview_channel: ChannelInfo | None = None
         self.editing_artist: Artist | None = None
+        self.default_avatar_image = self._make_default_avatar()
         self.preview_avatar_image = self._make_default_avatar()
         self.is_destroyed = False
         self.font = base_font()
@@ -217,13 +218,19 @@ class ArtistView(ctk.CTkFrame):
             frame.grid_columnconfigure(1, weight=1)
             frame.grid_rowconfigure(0, weight=1)
 
-            avatar_label = ctk.CTkLabel(frame, image=self._make_default_avatar(), text="")
+            avatar_label = ctk.CTkLabel(frame, image=self.default_avatar_image, text="")
             avatar_label.grid(row=0, column=0, padx=(10, 8), pady=10)
             self.artist_avatar_labels[artist.artist_id] = avatar_label
             if artist.artist_id in self.artist_avatar_images:
                 avatar_label.configure(image=self.artist_avatar_images[artist.artist_id])
             else:
-                self._load_artist_avatar_async(artist)
+                image = self.thumbnail_service.get_existing_channel_avatar(artist.channel_id)
+                if image is not None:
+                    photo = ctk.CTkImage(light_image=image, dark_image=image, size=CHANNEL_AVATAR_SIZE)
+                    self.artist_avatar_images[artist.artist_id] = photo
+                    avatar_label.configure(image=photo)
+                else:
+                    self._load_artist_avatar_async(artist)
 
             text_frame = ctk.CTkFrame(frame, fg_color="transparent")
             text_frame.grid(row=0, column=1, sticky="ew", padx=6, pady=10)

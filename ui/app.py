@@ -35,7 +35,8 @@ class App(ctk.CTk):
 
         self.artist_repository = ArtistRepository()
         self.song_repository = SongRepository()
-        self.tag_repository = TagRepository()
+        self.tag_repository = TagRepository("artist")
+        self.song_tag_repository = TagRepository("song")
         self.youtube_service = YouTubeService()
         self.thumbnail_service = ThumbnailService()
         self.download_service = DownloadService(self.song_repository, self.thumbnail_service)
@@ -93,6 +94,7 @@ class App(ctk.CTk):
             song_repository=self.song_repository,
             song_service=self.song_service,
             thumbnail_service=self.thumbnail_service,
+            tag_repository=self.song_tag_repository,
         )
         self.song_management_view.grid(row=0, column=0, sticky="nsew")
 
@@ -119,10 +121,11 @@ class App(ctk.CTk):
             tag_repository=self.tag_repository,
         )
         self.artist_tag_management_view.grid(row=0, column=0, sticky="nsew")
-        self.song_tags_placeholder = self._build_placeholder(
-            "歌曲標籤",
-            "歌曲標籤管理功能預留中。之後可以新增、編輯、刪除歌曲標籤，並套用到歌曲。",
+        self.song_tag_management_view = TagManagementView(
+            self.body_frame,
+            tag_repository=self.song_tag_repository,
         )
+        self.song_tag_management_view.grid(row=0, column=0, sticky="nsew")
 
         self.pages = {
             "player": self.player_placeholder,
@@ -131,7 +134,7 @@ class App(ctk.CTk):
             "download_channel": self.video_view,
             "download_single": self.download_single_placeholder,
             "artist_tags": self.artist_tag_management_view,
-            "song_tags": self.song_tags_placeholder,
+            "song_tags": self.song_tag_management_view,
         }
         for page in self.pages.values():
             page.grid_remove()
