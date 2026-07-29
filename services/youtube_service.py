@@ -23,6 +23,15 @@ class VideoListResult:
     total_count: int | None
 
 
+@dataclass(frozen=True)
+class SingleVideoInfo:
+    video: Video
+    channel_id: str | None
+    channel_name: str | None
+    channel_url: str | None
+    avatar_url: str | None
+
+
 class YouTubeService:
     def get_channel_info(self, url: str) -> ChannelInfo:
         options = {
@@ -130,6 +139,39 @@ class YouTubeService:
             download_status=video.download_status,
             is_downloaded=video.is_downloaded,
             file_missing=video.file_missing,
+        )
+
+    def get_single_video_info(self, url: str) -> SingleVideoInfo:
+        options = {
+            "quiet": True,
+            "skip_download": True,
+            "noplaylist": True,
+        }
+        try:
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as exc:
+            raise RuntimeError(f"無法取得單曲資料：{exc}") from exc
+
+        video_id = info.get("id")
+        if not video_id:
+            raise RuntimeError("無法取得影片 ID。")
+        webpage_url = info.get("webpage_url") or url
+        video = Video(
+            youtube_video_id=video_id,
+            youtube_url=webpage_url,
+            title=info.get("title") or "(未命名影片)",
+            thumbnail_url=self._best_thumbnail_url(info),
+            duration=info.get("duration"),
+            upload_date=info.get("upload_date"),
+            view_count=info.get("view_count"),
+        )
+        return SingleVideoInfo(
+            video=video,
+            channel_id=info.get("channel_id") or info.get("uploader_id"),
+            channel_name=info.get("channel") or info.get("uploader"),
+            channel_url=info.get("channel_url") or info.get("uploader_url"),
+            avatar_url=None,
         )
 
     def _videos_url(self, channel_url: str) -> str:

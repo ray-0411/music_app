@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 
 import customtkinter as ctk
 
@@ -14,6 +15,7 @@ from services.youtube_service import YouTubeService
 from ui.artist_view import ArtistView
 from ui.fonts import base_font, button_font, title_font
 from ui.player_view import PlayerView
+from ui.single_download_view import SingleDownloadView
 from ui.song_management_view import SongManagementView
 from ui.tag_management_view import TagManagementView
 from ui.video_view import VideoView
@@ -125,6 +127,17 @@ class App(ctk.CTk):
             "單曲下載",
             "單曲下載功能預留中。現在請先使用「頻道下載」。",
         )
+        self.download_single_placeholder.grid_remove()
+        self.single_download_view = SingleDownloadView(
+            self.body_frame,
+            artist_repository=self.artist_repository,
+            song_repository=self.song_repository,
+            youtube_service=self.youtube_service,
+            thumbnail_service=self.thumbnail_service,
+            download_service=self.download_service,
+            on_downloads_changed=self._downloads_changed,
+        )
+        self.single_download_view.grid(row=0, column=0, sticky="nsew")
         self.settings_page = self._build_settings_page()
         self.artist_tag_management_view = TagManagementView(
             self.body_frame,
@@ -142,7 +155,7 @@ class App(ctk.CTk):
             "artists": self.artist_view,
             "songs": self.song_management_view,
             "download_channel": self.video_view,
-            "download_single": self.download_single_placeholder,
+            "download_single": self.single_download_view,
             "artist_tags": self.artist_tag_management_view,
             "song_tags": self.song_tag_management_view,
             "settings": self.settings_page,
@@ -183,6 +196,7 @@ class App(ctk.CTk):
 
     def _artists_changed(self) -> None:
         self.video_view.reload_artists()
+        self.single_download_view.reload_artists()
 
     def _downloads_changed(self) -> None:
         self.song_management_view.reload_songs()
@@ -247,6 +261,8 @@ class App(ctk.CTk):
             page_key = "player"
         if page_key == "settings":
             self.refresh_settings_page()
+        if page_key == "download_single":
+            self.single_download_view.reload_artists()
         for key, page in self.pages.items():
             if key == page_key:
                 page.grid()
@@ -283,12 +299,23 @@ class App(ctk.CTk):
         )
         self.image_storage_label = ctk.CTkLabel(frame, text="-", font=self.font, anchor="w")
         self.image_storage_label.grid(row=2, column=1, sticky="ew", padx=18, pady=8)
+        ctk.CTkLabel(frame, text="Cache 空間", font=self.font, anchor="w").grid(
+            row=3, column=0, sticky="w", padx=18, pady=8
+        )
+        self.cache_storage_label = ctk.CTkLabel(frame, text="-", font=self.font, anchor="w")
+        self.cache_storage_label.grid(row=3, column=1, sticky="ew", padx=18, pady=8)
         ctk.CTkButton(
             frame,
             text="重新整理",
             command=self.refresh_settings_page,
             font=self.nav_font,
-        ).grid(row=3, column=1, sticky="w", padx=18, pady=(14, 8))
+        ).grid(row=4, column=1, sticky="w", padx=18, pady=(14, 8))
+        ctk.CTkButton(
+            frame,
+            text="清空 cache",
+            command=self.clear_cache,
+            font=self.nav_font,
+        ).grid(row=4, column=1, sticky="w", padx=(170, 18), pady=(14, 8))
         self.refresh_settings_page()
         return frame
 
@@ -297,8 +324,21 @@ class App(ctk.CTk):
             return
         song_bytes = self._directory_size(DOWNLOADS_DIR)
         image_bytes = self._directory_size(ASSETS_DIR)
+        cache_bytes = self._directory_size(CACHE_DIR)
         self.song_storage_label.configure(text=self._format_bytes(song_bytes))
         self.image_storage_label.configure(text=self._format_bytes(image_bytes))
+        self.cache_storage_label.configure(text=self._format_bytes(cache_bytes))
+
+    def clear_cache(self) -> None:
+        if CACHE_DIR.exists():
+            for child in CACHE_DIR.iterdir():
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        THUMBNAIL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        self.refresh_settings_page()
 
     def _directory_size(self, path: Path) -> int:
         if not path.exists():
