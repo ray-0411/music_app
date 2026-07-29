@@ -16,6 +16,8 @@ from utils.filename import build_song_name
 
 
 class SongManagementView(ctk.CTkFrame):
+    PAGE_SIZE = 5
+
     def __init__(
         self,
         master,
@@ -40,6 +42,14 @@ class SongManagementView(ctk.CTkFrame):
         self.default_thumbnail = self._make_default_thumbnail()
         self.is_destroyed = False
         self.editing_song: Song | None = None
+        self.songs: list[Song] = []
+        self.all_songs: list[Song] = []
+        self.artist_names: dict[str, str] = {}
+        self.current_page = 0
+        self.search_tag_vars: dict[int, ctk.BooleanVar] = {}
+        self.search_keyword = ""
+        self.selected_search_tag_ids: set[int] = set()
+        self.selected_search_artist_id = ""
         self.font = base_font()
         self.button_font = button_font()
 
@@ -50,6 +60,8 @@ class SongManagementView(ctk.CTkFrame):
         toolbar.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         self.refresh_button = ctk.CTkButton(toolbar, text="重新整理", command=self.reload_songs, font=self.button_font)
         self.refresh_button.pack(side="left", padx=12, pady=10)
+        self.search_button = ctk.CTkButton(toolbar, text="搜尋", command=self.show_search_page, font=self.button_font)
+        self.search_button.pack(side="left", padx=(0, 12), pady=10)
         self.status_label = ctk.CTkLabel(toolbar, text="", anchor="w", font=self.font)
         self.status_label.pack(side="left", fill="x", expand=True, padx=12, pady=10)
 
@@ -57,44 +69,120 @@ class SongManagementView(ctk.CTkFrame):
         self.list_page.grid(row=1, column=0, sticky="nsew")
         self.list_page.grid_columnconfigure(0, weight=1)
         self.list_page.grid_rowconfigure(0, weight=1)
+        self.list_page.grid_rowconfigure(1, weight=0)
 
         self.edit_page = ctk.CTkScrollableFrame(self)
         self.edit_page.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.edit_page.grid_columnconfigure(1, weight=1)
 
-        self.song_list = ctk.CTkScrollableFrame(self.list_page)
+        self.search_page = ctk.CTkScrollableFrame(self)
+        self.search_page.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.search_page.grid_columnconfigure(1, weight=1)
+
+        self.song_list = ctk.CTkFrame(self.list_page, fg_color="transparent")
         self.song_list.grid(row=0, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.song_list.grid_columnconfigure(0, weight=1)
+
+        self.pagination_frame = ctk.CTkFrame(self.list_page)
+        self.pagination_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
+        self.pagination_frame.grid_columnconfigure(1, weight=1)
+        self.prev_page_button = ctk.CTkButton(
+            self.pagination_frame,
+            text="上一頁",
+            width=96,
+            command=self.previous_page,
+            font=self.button_font,
+        )
+        self.prev_page_button.grid(row=0, column=0, sticky="w", padx=10, pady=8)
+        self.page_label = ctk.CTkLabel(self.pagination_frame, text="", anchor="center", font=self.font)
+        self.page_label.grid(row=0, column=1, sticky="ew", padx=10, pady=8)
+        self.next_page_button = ctk.CTkButton(
+            self.pagination_frame,
+            text="下一頁",
+            width=96,
+            command=self.next_page,
+            font=self.button_font,
+        )
+        self.next_page_button.grid(row=0, column=2, sticky="e", padx=10, pady=8)
         self.reload_songs()
         self.show_list_page()
 
     def reload_songs(self) -> None:
-        for child in self.song_list.winfo_children():
-            child.destroy()
-        self.thumbnail_labels.clear()
-        artist_names = {
+        self.artist_names = {
             artist.artist_id.lower(): artist.channel_name
             for artist in self.artist_repository.list_artists()
         }
-        songs = self.song_repository.list_songs()
-        if not songs:
+        self.all_songs = self.song_repository.list_songs()
+        self.songs = self._filter_songs(self.all_songs)
+        max_page = self._max_page()
+        if self.current_page > max_page:
+            self.current_page = max_page
+        self.render_song_page()
+
+    def render_song_page(self) -> None:
+        for child in self.song_list.winfo_children():
+            child.destroy()
+        self.thumbnail_labels.clear()
+        if not self.songs:
             ctk.CTkLabel(self.song_list, text="尚無已下載歌曲", anchor="w", font=self.font).grid(
                 row=0, column=0, sticky="ew", padx=8, pady=8
             )
             self.set_status("")
+            self._update_pagination_controls()
             return
-        for row, song in enumerate(songs):
-            self._render_song(row, song, artist_names)
-        self.set_status(f"共 {len(songs)} 首下載紀錄。")
+        start = self.current_page * self.PAGE_SIZE
+        end = start + self.PAGE_SIZE
+        for row, song in enumerate(self.songs[start:end]):
+            self._render_song(row, song, self.artist_names)
+        self._scroll_list_to_top()
+        self._update_pagination_controls()
+        self.set_status(f"共 {len(self.songs)} 首下載紀錄。")
+
+    def previous_page(self) -> None:
+        if self.current_page <= 0:
+            return
+        self.current_page -= 1
+        self.render_song_page()
+
+    def next_page(self) -> None:
+        if self.current_page >= self._max_page():
+            return
+        self.current_page += 1
+        self.render_song_page()
+
+    def _max_page(self) -> int:
+        if not self.songs:
+            return 0
+        return (len(self.songs) - 1) // self.PAGE_SIZE
+
+    def _update_pagination_controls(self) -> None:
+        if not self.songs:
+            self.page_label.configure(text="第 0 / 0 頁")
+            self.prev_page_button.configure(state="disabled")
+            self.next_page_button.configure(state="disabled")
+            return
+        total_pages = self._max_page() + 1
+        start = self.current_page * self.PAGE_SIZE + 1
+        end = min(start + self.PAGE_SIZE - 1, len(self.songs))
+        self.page_label.configure(
+            text=f"第 {self.current_page + 1} / {total_pages} 頁，顯示 {start}-{end} / {len(self.songs)}"
+        )
+        self.prev_page_button.configure(state="normal" if self.current_page > 0 else "disabled")
+        self.next_page_button.configure(state="normal" if self.current_page < self._max_page() else "disabled")
+
+    def _scroll_list_to_top(self) -> None:
+        return
 
     def _render_song(self, row: int, song: Song, artist_names: dict[str, str]) -> None:
         frame = ctk.CTkFrame(self.song_list)
-        frame.grid(row=row, column=0, sticky="ew", padx=6, pady=6)
+        frame.grid(row=row, column=0, sticky="ew", padx=6, pady=4)
+        frame.grid_propagate(False)
+        frame.configure(height=104)
         frame.grid_columnconfigure(2, weight=1)
         frame.grid_rowconfigure((0, 1), weight=1)
 
         thumb_label = ctk.CTkLabel(frame, image=self.default_thumbnail, text="")
-        thumb_label.grid(row=0, column=0, rowspan=2, padx=(10, 6), pady=10)
+        thumb_label.grid(row=0, column=0, rowspan=2, padx=(10, 6), pady=7)
         self.thumbnail_labels[song.youtube_video_id] = thumb_label
         if song.youtube_video_id in self.thumbnail_images:
             thumb_label.configure(image=self.thumbnail_images[song.youtube_video_id])
@@ -110,11 +198,11 @@ class SongManagementView(ctk.CTkFrame):
         status = self._song_status(song)
         artist_name = artist_names.get(song.artist_id.lower(), song.artist_id)
         ctk.CTkLabel(frame, text=artist_name, width=140, anchor="w", font=self.font).grid(
-            row=0, column=1, rowspan=2, sticky="nsew", padx=(6, 6), pady=10
+            row=0, column=1, rowspan=2, sticky="nsew", padx=(6, 6), pady=7
         )
 
         ctk.CTkLabel(frame, text=self._display_song_name(song), anchor="w", font=self.font).grid(
-            row=0, column=2, sticky="nsew", padx=6, pady=(10, 4)
+            row=0, column=2, sticky="nsew", padx=6, pady=(7, 3)
         )
         ctk.CTkButton(
             frame,
@@ -122,10 +210,156 @@ class SongManagementView(ctk.CTkFrame):
             width=72,
             command=lambda selected_song=song: self.show_edit_page(selected_song),
             font=self.button_font,
-        ).grid(row=0, column=3, rowspan=2, padx=(6, 10), pady=10)
+        ).grid(row=0, column=3, rowspan=2, padx=(6, 10), pady=7)
         ctk.CTkLabel(frame, text=f"長度：{self._display_duration(song.duration)}", anchor="w", font=self.font).grid(
-            row=1, column=2, sticky="nsew", padx=6, pady=(0, 10)
+            row=1, column=2, sticky="nsew", padx=6, pady=(0, 7)
         )
+
+    def render_search_page(self) -> None:
+        for child in self.search_page.winfo_children():
+            child.destroy()
+        self.search_tag_vars.clear()
+        ctk.CTkLabel(self.search_page, text="搜尋歌曲", anchor="w", font=self.font).grid(
+            row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(12, 8)
+        )
+        ctk.CTkLabel(self.search_page, text="名稱", anchor="w", font=self.font).grid(
+            row=1, column=0, sticky="w", padx=12, pady=8
+        )
+        self.search_entry = ctk.CTkEntry(self.search_page, font=self.font)
+        self.search_entry.insert(0, self.search_keyword)
+        self.search_entry.grid(row=1, column=1, sticky="ew", padx=12, pady=8)
+        self.search_entry.bind("<Return>", lambda _event: self.apply_search())
+
+        ctk.CTkLabel(self.search_page, text="歌手", anchor="w", font=self.font).grid(
+            row=2, column=0, sticky="w", padx=12, pady=8
+        )
+        self.search_artist_labels = self._search_artist_labels()
+        self.search_artist_menu = ctk.CTkOptionMenu(
+            self.search_page,
+            values=list(self.search_artist_labels.keys()),
+            font=self.font,
+        )
+        self.search_artist_menu.set(self._search_artist_label_by_id(self.selected_search_artist_id))
+        self.search_artist_menu.grid(row=2, column=1, sticky="ew", padx=12, pady=8)
+
+        ctk.CTkLabel(self.search_page, text="標籤", anchor="w", font=self.font).grid(
+            row=3, column=0, sticky="nw", padx=12, pady=(14, 8)
+        )
+        tag_frame = ctk.CTkFrame(self.search_page, fg_color="transparent")
+        tag_frame.grid(row=3, column=1, sticky="ew", padx=12, pady=(10, 8))
+        tag_frame.grid_columnconfigure(1, weight=1)
+        self._render_search_tag_options(tag_frame)
+
+        buttons = ctk.CTkFrame(self.search_page, fg_color="transparent")
+        buttons.grid(row=4, column=1, sticky="w", padx=12, pady=(14, 16))
+        ctk.CTkButton(buttons, text="搜尋", command=self.apply_search, font=self.button_font).pack(
+            side="left", padx=(0, 8)
+        )
+        ctk.CTkButton(buttons, text="清除", command=self.clear_search, font=self.button_font).pack(
+            side="left", padx=8
+        )
+        ctk.CTkButton(buttons, text="返回", command=self.show_list_page, font=self.button_font).pack(
+            side="left", padx=8
+        )
+
+    def _render_search_tag_options(self, tag_frame: ctk.CTkFrame) -> None:
+        categories = self.tag_repository.list_categories()
+        if not categories:
+            ctk.CTkLabel(tag_frame, text="尚無歌曲標籤分類", anchor="w", font=self.font).grid(
+                row=0, column=0, sticky="ew", pady=4
+            )
+            return
+        row = 0
+        for category in categories:
+            options = self.tag_repository.list_options_by_category(category.id)
+            ctk.CTkLabel(tag_frame, text=category.name, anchor="w", font=self.font).grid(
+                row=row, column=0, sticky="nw", padx=(0, 8), pady=4
+            )
+            options_frame = ctk.CTkFrame(tag_frame, fg_color="transparent")
+            options_frame.grid(row=row, column=1, sticky="ew", pady=2)
+            if not options:
+                ctk.CTkLabel(options_frame, text="尚無下層標籤", anchor="w", font=self.font).grid(
+                    row=0, column=0, sticky="w", padx=4, pady=2
+                )
+            for index, option in enumerate(options):
+                var = ctk.BooleanVar(value=option.id in self.selected_search_tag_ids)
+                self.search_tag_vars[option.id] = var
+                ctk.CTkCheckBox(
+                    options_frame,
+                    text=option.name,
+                    variable=var,
+                    onvalue=True,
+                    offvalue=False,
+                    font=self.font,
+                ).grid(row=index // 3, column=index % 3, sticky="w", padx=4, pady=2)
+            row += 1
+
+    def apply_search(self) -> None:
+        self.search_keyword = self.search_entry.get().strip()
+        self.selected_search_artist_id = self.search_artist_labels.get(self.search_artist_menu.get(), "")
+        self.selected_search_tag_ids = {
+            option_id for option_id, var in self.search_tag_vars.items() if var.get()
+        }
+        self.current_page = 0
+        self.songs = self._filter_songs(self.all_songs)
+        self.show_list_page(reload=False)
+        self.set_status(f"搜尋結果 {len(self.songs)} 首。")
+
+    def clear_search(self) -> None:
+        self.search_keyword = ""
+        self.selected_search_artist_id = ""
+        self.selected_search_tag_ids.clear()
+        self.current_page = 0
+        self.songs = list(self.all_songs)
+        self.show_list_page(reload=False)
+        self.set_status(f"共 {len(self.songs)} 首下載紀錄。")
+
+    def _filter_songs(self, songs: list[Song]) -> list[Song]:
+        keyword = self.search_keyword.strip().lower()
+        artist_id = self.selected_search_artist_id.strip().lower()
+        selected_tags = set(self.selected_search_tag_ids)
+        if not keyword and not artist_id and not selected_tags:
+            return list(songs)
+        filtered: list[Song] = []
+        for song in songs:
+            if artist_id and song.artist_id.lower() != artist_id:
+                continue
+            if keyword and not self._song_matches_keyword(song, keyword):
+                continue
+            if selected_tags and not self._song_matches_tags(song, selected_tags):
+                continue
+            filtered.append(song)
+        return filtered
+
+    def _song_matches_keyword(self, song: Song, keyword: str) -> bool:
+        artist_name = self.artist_names.get(song.artist_id.lower(), song.artist_id)
+        fields = [
+            artist_name,
+            song.artist_id,
+            song.song_name,
+            song.original_title,
+            self._display_song_name(song),
+        ]
+        return any(keyword in (field or "").lower() for field in fields)
+
+    def _song_matches_tags(self, song: Song, selected_tags: set[int]) -> bool:
+        if song.id is None:
+            return False
+        return selected_tags.issubset(self.tag_repository.get_song_option_ids(song.id))
+
+    def _search_artist_labels(self) -> dict[str, str]:
+        labels = {"全部歌手": ""}
+        for artist in self.artist_repository.list_artists():
+            labels[f"{artist.channel_name} / {artist.artist_id}"] = artist.artist_id
+        return labels
+
+    def _search_artist_label_by_id(self, artist_id: str) -> str:
+        if not artist_id:
+            return "全部歌手"
+        for label, current_artist_id in self.search_artist_labels.items():
+            if current_artist_id.lower() == artist_id.lower():
+                return label
+        return "全部歌手"
 
     def render_edit_page(self) -> None:
         for child in self.edit_page.winfo_children():
@@ -279,18 +513,29 @@ class SongManagementView(ctk.CTkFrame):
             return
         label.configure(image=photo)
 
-    def show_list_page(self) -> None:
+    def show_list_page(self, *, reload: bool = True) -> None:
         self.edit_page.grid_remove()
+        self.search_page.grid_remove()
         self.list_page.grid()
         self.editing_song = None
         self.tag_vars.clear()
-        self.reload_songs()
+        if reload:
+            self.reload_songs()
+        else:
+            self.render_song_page()
 
     def show_edit_page(self, song: Song) -> None:
         self.editing_song = song
         self.render_edit_page()
         self.list_page.grid_remove()
+        self.search_page.grid_remove()
         self.edit_page.grid()
+
+    def show_search_page(self) -> None:
+        self.render_search_page()
+        self.list_page.grid_remove()
+        self.edit_page.grid_remove()
+        self.search_page.grid()
 
     def save_song_edit(self) -> None:
         song = self.editing_song
