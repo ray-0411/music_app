@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw
 
 from config import APP_FONT_FAMILY, CHANNEL_AVATAR_SIZE
 from database.artist_repository import ArtistRepository
+from database.rating_repository import RatingRepository
 from database.tag_repository import TagRepository
 from models.artist import Artist
 from services.thumbnail_service import ThumbnailService
@@ -29,6 +30,7 @@ class ArtistView(ctk.CTkFrame):
         youtube_service: YouTubeService,
         thumbnail_service: ThumbnailService,
         tag_repository: TagRepository,
+        rating_repository: RatingRepository,
         on_artists_changed,
     ) -> None:
         super().__init__(master, fg_color="transparent")
@@ -36,6 +38,7 @@ class ArtistView(ctk.CTkFrame):
         self.youtube_service = youtube_service
         self.thumbnail_service = thumbnail_service
         self.tag_repository = tag_repository
+        self.rating_repository = rating_repository
         self.on_artists_changed = on_artists_changed
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.channel_name_entries: dict[str, ctk.CTkEntry] = {}
@@ -48,6 +51,8 @@ class ArtistView(ctk.CTkFrame):
         self.editing_artist: Artist | None = None
         self.default_avatar_image = self._make_default_avatar()
         self.preview_avatar_image = self._make_default_avatar()
+        self.artist_rating_score_var = ctk.IntVar(value=5)
+        self.artist_rating_type_var = ctk.StringVar(value="影響演算法")
         self.is_destroyed = False
         self.font = base_font()
         self.button_font = button_font()
@@ -70,6 +75,7 @@ class ArtistView(ctk.CTkFrame):
         self.edit_page = ctk.CTkScrollableFrame(self)
         self.edit_page.grid(row=0, column=0, sticky="nsew")
         self.edit_page.grid_columnconfigure(1, weight=1)
+        self.edit_page.grid_columnconfigure(2, weight=0, minsize=260)
 
         form = ctk.CTkFrame(self.add_page)
         form.grid(row=0, column=0, sticky="nsew", padx=(8, 6), pady=8)
@@ -362,7 +368,7 @@ class ArtistView(ctk.CTkFrame):
         if artist is None:
             return
         ctk.CTkLabel(self.edit_page, text=f"編輯歌手：{artist.artist_id}", font=self.bold_font).grid(
-            row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(12, 8)
+            row=0, column=0, columnspan=3, sticky="ew", padx=12, pady=(12, 8)
         )
         ctk.CTkLabel(self.edit_page, text="頻道名稱", font=self.font).grid(
             row=1, column=0, sticky="w", padx=12, pady=8
@@ -401,6 +407,8 @@ class ArtistView(ctk.CTkFrame):
                 ).pack(side="left", padx=6, pady=4)
             row += 1
 
+        self._render_artist_rating_panel(artist, row)
+
         buttons = ctk.CTkFrame(self.edit_page, fg_color="transparent")
         buttons.grid(row=row, column=0, columnspan=2, sticky="e", padx=12, pady=14)
         ctk.CTkButton(
@@ -415,6 +423,47 @@ class ArtistView(ctk.CTkFrame):
             font=self.button_font,
             command=self.show_list_page,
         ).pack(side="left", padx=6)
+
+    def _render_artist_rating_panel(self, artist: Artist, row_span: int) -> None:
+        panel = ctk.CTkFrame(self.edit_page)
+        panel.grid(row=1, column=2, rowspan=max(row_span, 4), sticky="new", padx=(16, 12), pady=8)
+        panel.grid_columnconfigure(0, weight=1)
+        self.artist_rating_score_var.set(5)
+        self.artist_rating_type_var.set("影響演算法")
+        ctk.CTkLabel(panel, text="歌手評分", anchor="w", font=self.font).grid(
+            row=0, column=0, sticky="ew", padx=12, pady=(12, 8)
+        )
+        self.artist_rating_value_label = ctk.CTkLabel(panel, text="5 / 10", font=self.font)
+        self.artist_rating_value_label.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
+        ctk.CTkSlider(
+            panel,
+            from_=0,
+            to=10,
+            number_of_steps=10,
+            variable=self.artist_rating_score_var,
+            command=lambda value: self._update_artist_rating_label(value),
+        ).grid(row=2, column=0, sticky="ew", padx=12, pady=6)
+        ctk.CTkOptionMenu(
+            panel,
+            values=["影響演算法", "單純評分"],
+            variable=self.artist_rating_type_var,
+            font=self.font,
+        ).grid(row=3, column=0, sticky="ew", padx=12, pady=8)
+        self.artist_rating_submit_button = ctk.CTkButton(
+            panel,
+            text="送出評分",
+            command=self.submit_artist_rating,
+            font=self.button_font,
+            state="disabled" if self.rating_repository.has_artist_rating_today(artist.artist_id) else "normal",
+        )
+        self.artist_rating_submit_button.grid(row=4, column=0, sticky="ew", padx=12, pady=(8, 12))
+        self.artist_rating_status_label = ctk.CTkLabel(
+            panel,
+            text=self._artist_rating_status_text(artist.artist_id),
+            anchor="w",
+            font=self.font,
+        )
+        self.artist_rating_status_label.grid(row=5, column=0, sticky="ew", padx=12, pady=(0, 12))
 
     def save_artist_edit(self) -> None:
         artist = self.editing_artist
@@ -434,6 +483,37 @@ class ArtistView(ctk.CTkFrame):
         self.set_status(f"已更新歌手：{updated.artist_id} / {updated.channel_name}")
         self.on_artists_changed()
         self.show_list_page()
+
+    def submit_artist_rating(self) -> None:
+        artist = self.editing_artist
+        if artist is None:
+            self.set_status("找不到歌手。", error=True)
+            return
+        score = int(round(self.artist_rating_score_var.get()))
+        affects_algorithm = self.artist_rating_type_var.get() == "影響演算法"
+        try:
+            self.rating_repository.add_artist_rating(
+                artist.artist_id,
+                score,
+                affects_algorithm=affects_algorithm,
+            )
+        except Exception as exc:
+            self.set_status(str(exc), error=True)
+            return
+        self.artist_rating_status_label.configure(text=self._artist_rating_status_text(artist.artist_id))
+        self.artist_rating_submit_button.configure(state="disabled")
+        self.set_status(f"已送出歌手評分：{score}/10")
+
+    def _artist_rating_status_text(self, artist_id: str) -> str:
+        count = self.rating_repository.artist_rating_count(artist_id)
+        score = self.rating_repository.artist_algorithm_score(artist_id)
+        today = "今天已評過" if self.rating_repository.has_artist_rating_today(artist_id) else "今天尚未評分"
+        return f"已記錄 {count} 筆評分\n演算法分數：{score:.2f} / 10\n{today}"
+
+    def _update_artist_rating_label(self, value) -> None:
+        score = int(round(float(value)))
+        self.artist_rating_score_var.set(score)
+        self.artist_rating_value_label.configure(text=f"{score} / 10")
 
     def _make_default_avatar(self):
         image = Image.new("RGB", CHANNEL_AVATAR_SIZE, "#d9dee8")

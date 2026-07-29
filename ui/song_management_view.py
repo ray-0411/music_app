@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw
 
 from config import APP_FONT_FAMILY, DOWNLOADS_DIR, THUMBNAIL_SIZE
 from database.artist_repository import ArtistRepository
+from database.rating_repository import RatingRepository
 from database.song_repository import SongRepository
 from database.tag_repository import TagRepository
 from models.song import Song
@@ -27,6 +28,7 @@ class SongManagementView(ctk.CTkFrame):
         song_service: SongService,
         thumbnail_service: ThumbnailService,
         tag_repository: TagRepository,
+        rating_repository: RatingRepository,
     ) -> None:
         super().__init__(master, fg_color="transparent")
         self.artist_repository = artist_repository
@@ -34,6 +36,7 @@ class SongManagementView(ctk.CTkFrame):
         self.song_service = song_service
         self.thumbnail_service = thumbnail_service
         self.tag_repository = tag_repository
+        self.rating_repository = rating_repository
         self.tag_vars: dict[int, ctk.BooleanVar] = {}
         self.thumbnail_labels: dict[str, ctk.CTkLabel] = {}
         self.thumbnail_images: dict[str, ctk.CTkImage] = {}
@@ -50,6 +53,8 @@ class SongManagementView(ctk.CTkFrame):
         self.search_keyword = ""
         self.selected_search_tag_ids: set[int] = set()
         self.selected_search_artist_id = ""
+        self.song_rating_score_var = ctk.IntVar(value=5)
+        self.song_rating_type_var = ctk.StringVar(value="影響演算法")
         self.font = base_font()
         self.button_font = button_font()
 
@@ -74,6 +79,7 @@ class SongManagementView(ctk.CTkFrame):
         self.edit_page = ctk.CTkScrollableFrame(self)
         self.edit_page.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.edit_page.grid_columnconfigure(1, weight=1)
+        self.edit_page.grid_columnconfigure(2, weight=0, minsize=260)
 
         self.search_page = ctk.CTkScrollableFrame(self)
         self.search_page.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
@@ -370,7 +376,7 @@ class SongManagementView(ctk.CTkFrame):
             return
 
         ctk.CTkLabel(self.edit_page, text=f"編輯歌曲：{self._display_song_name(song)}", anchor="w", font=self.font).grid(
-            row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(12, 8)
+            row=0, column=0, columnspan=3, sticky="ew", padx=12, pady=(12, 8)
         )
         ctk.CTkLabel(self.edit_page, text="歌曲名稱", anchor="w", font=self.font).grid(
             row=1, column=0, sticky="w", padx=12, pady=8
@@ -431,6 +437,7 @@ class SongManagementView(ctk.CTkFrame):
         tag_frame.grid(row=7, column=1, sticky="ew", padx=12, pady=(10, 8))
         tag_frame.grid_columnconfigure(1, weight=1)
         self._render_tag_editor(tag_frame, song)
+        self._render_song_rating_panel(song)
 
         buttons = ctk.CTkFrame(self.edit_page, fg_color="transparent")
         buttons.grid(row=8, column=1, sticky="w", padx=12, pady=(10, 16))
@@ -446,6 +453,47 @@ class SongManagementView(ctk.CTkFrame):
             command=self.show_list_page,
             font=self.button_font,
         ).pack(side="left", padx=8)
+
+    def _render_song_rating_panel(self, song: Song) -> None:
+        panel = ctk.CTkFrame(self.edit_page)
+        panel.grid(row=1, column=2, rowspan=8, sticky="new", padx=(16, 12), pady=8)
+        panel.grid_columnconfigure(0, weight=1)
+        self.song_rating_score_var.set(5)
+        self.song_rating_type_var.set("影響演算法")
+        ctk.CTkLabel(panel, text="歌曲評分", anchor="w", font=self.font).grid(
+            row=0, column=0, sticky="ew", padx=12, pady=(12, 8)
+        )
+        self.song_rating_value_label = ctk.CTkLabel(panel, text="5 / 10", font=self.font)
+        self.song_rating_value_label.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 6))
+        ctk.CTkSlider(
+            panel,
+            from_=0,
+            to=10,
+            number_of_steps=10,
+            variable=self.song_rating_score_var,
+            command=lambda value: self._update_song_rating_label(value),
+        ).grid(row=2, column=0, sticky="ew", padx=12, pady=6)
+        ctk.CTkOptionMenu(
+            panel,
+            values=["影響演算法", "單純評分"],
+            variable=self.song_rating_type_var,
+            font=self.font,
+        ).grid(row=3, column=0, sticky="ew", padx=12, pady=8)
+        self.song_rating_submit_button = ctk.CTkButton(
+            panel,
+            text="送出評分",
+            command=self.submit_song_rating,
+            font=self.button_font,
+            state="disabled" if song.id is not None and self.rating_repository.has_song_rating_today(song.id) else "normal",
+        )
+        self.song_rating_submit_button.grid(row=4, column=0, sticky="ew", padx=12, pady=(8, 12))
+        self.song_rating_status_label = ctk.CTkLabel(
+            panel,
+            text=self._song_rating_status_text(song),
+            anchor="w",
+            font=self.font,
+        )
+        self.song_rating_status_label.grid(row=5, column=0, sticky="ew", padx=12, pady=(0, 12))
 
     def _render_tag_editor(self, tag_frame: ctk.CTkFrame, song: Song) -> None:
         if song.id is None:
@@ -553,6 +601,39 @@ class SongManagementView(ctk.CTkFrame):
         self.tag_vars.clear()
         self.set_status(f"已更新歌曲：{updated.file_name}")
         self.show_list_page()
+
+    def submit_song_rating(self) -> None:
+        song = self.editing_song
+        if song is None or song.id is None:
+            self.set_status("找不到歌曲 ID。", error=True)
+            return
+        score = int(round(self.song_rating_score_var.get()))
+        affects_algorithm = self.song_rating_type_var.get() == "影響演算法"
+        try:
+            self.rating_repository.add_song_rating(
+                song.id,
+                score,
+                affects_algorithm=affects_algorithm,
+            )
+        except Exception as exc:
+            self.set_status(str(exc), error=True)
+            return
+        self.song_rating_status_label.configure(text=self._song_rating_status_text(song))
+        self.song_rating_submit_button.configure(state="disabled")
+        self.set_status(f"已送出歌曲評分：{score}/10")
+
+    def _song_rating_status_text(self, song: Song) -> str:
+        if song.id is None:
+            return "尚未記錄評分"
+        count = self.rating_repository.song_rating_count(song.id)
+        score = self.rating_repository.song_algorithm_score(song.id)
+        today = "今天已評過" if self.rating_repository.has_song_rating_today(song.id) else "今天尚未評分"
+        return f"已記錄 {count} 筆評分\n演算法分數：{score:.2f} / 10\n{today}"
+
+    def _update_song_rating_label(self, value) -> None:
+        score = int(round(float(value)))
+        self.song_rating_score_var.set(score)
+        self.song_rating_value_label.configure(text=f"{score} / 10")
 
     def _song_status(self, song: Song) -> str:
         if song.download_status == "downloaded" and not Path(song.file_path).exists():

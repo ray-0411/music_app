@@ -1,7 +1,7 @@
 from database.connection import get_connection
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def initialize_database() -> None:
@@ -149,6 +149,38 @@ def initialize_database() -> None:
         )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_song_tag_options_category_id ON song_tag_options(category_id)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS song_ratings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                song_id INTEGER NOT NULL,
+                score INTEGER NOT NULL CHECK(score >= 0 AND score <= 10),
+                affects_algorithm INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (song_id) REFERENCES songs(id)
+                    ON UPDATE CASCADE ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS artist_ratings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                artist_id TEXT NOT NULL COLLATE NOCASE,
+                score INTEGER NOT NULL CHECK(score >= 0 AND score <= 10),
+                affects_algorithm INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (artist_id) REFERENCES artists(artist_id)
+                    ON UPDATE CASCADE ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_song_ratings_song_id ON song_ratings(song_id)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_artist_ratings_artist_id ON artist_ratings(artist_id)"
         )
         _ensure_column(connection, "artists", "avatar_url", "TEXT")
         _ensure_column(connection, "songs", "duration", "INTEGER")

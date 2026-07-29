@@ -5,6 +5,7 @@ import customtkinter as ctk
 
 from config import APP_FONT_FAMILY, ARTIST_IMAGE_DIR, ASSETS_DIR, CACHE_DIR, DOWNLOADS_DIR, SONG_IMAGE_DIR, THUMBNAIL_CACHE_DIR
 from database.artist_repository import ArtistRepository
+from database.rating_repository import RatingRepository
 from database.song_repository import SongRepository
 from database.tag_repository import TagRepository
 from services.download_service import DownloadService
@@ -41,6 +42,7 @@ class App(ctk.CTk):
 
         self.artist_repository = ArtistRepository()
         self.song_repository = SongRepository()
+        self.rating_repository = RatingRepository()
         self.tag_repository = TagRepository("artist")
         self.song_tag_repository = TagRepository("song")
         self.youtube_service = YouTubeService()
@@ -102,6 +104,7 @@ class App(ctk.CTk):
             song_service=self.song_service,
             thumbnail_service=self.thumbnail_service,
             tag_repository=self.song_tag_repository,
+            rating_repository=self.rating_repository,
         )
         self.song_management_view.grid(row=0, column=0, sticky="nsew")
 
@@ -111,6 +114,7 @@ class App(ctk.CTk):
             youtube_service=self.youtube_service,
             thumbnail_service=self.thumbnail_service,
             tag_repository=self.tag_repository,
+            rating_repository=self.rating_repository,
             on_artists_changed=self._artists_changed,
         )
         self.artist_view.grid(row=0, column=0, sticky="nsew")
@@ -119,6 +123,7 @@ class App(ctk.CTk):
             self.body_frame,
             song_repository=self.song_repository,
             artist_repository=self.artist_repository,
+            rating_repository=self.rating_repository,
             playback_service=self.playback_service,
             thumbnail_service=self.thumbnail_service,
         )

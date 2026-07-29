@@ -3,6 +3,7 @@ from PIL import Image, ImageDraw
 
 from config import PLAYER_COVER_SIZE
 from database.artist_repository import ArtistRepository
+from database.rating_repository import RatingRepository
 from database.song_repository import SongRepository
 from models.song import Song
 from services.playback_service import PlaybackService
@@ -18,12 +19,14 @@ class PlayerView(ctk.CTkFrame):
         *,
         song_repository: SongRepository,
         artist_repository: ArtistRepository,
+        rating_repository: RatingRepository,
         playback_service: PlaybackService,
         thumbnail_service: ThumbnailService,
     ) -> None:
         super().__init__(master, fg_color="transparent")
         self.song_repository = song_repository
         self.artist_repository = artist_repository
+        self.rating_repository = rating_repository
         self.playback_service = playback_service
         self.thumbnail_service = thumbnail_service
         self.artist_names: dict[str, str] = {}
@@ -32,6 +35,13 @@ class PlayerView(ctk.CTkFrame):
         self.default_cover_image = self._make_default_cover()
         self.is_dragging_slider = False
         self.progress_after_id: str | None = None
+        self.rating_score_var = ctk.IntVar(value=5)
+        self.rating_type_var = ctk.StringVar(value="影響演算法")
+        self.artist_rating_score_var = ctk.IntVar(value=5)
+        self.artist_rating_type_var = ctk.StringVar(value="影響演算法")
+        self.current_rating_song_id: int | None = None
+        self.song_rating_submitted_for_current_play = False
+        self.artist_rating_submitted_for_current_play = False
         self.font = base_font()
         self.button_font = button_font()
         self.title_font = title_font()
@@ -157,9 +167,97 @@ class PlayerView(ctk.CTkFrame):
         ctk.CTkLabel(self.rating_frame, text="評分區", anchor="w", font=self.title_font).grid(
             row=0, column=0, sticky="ew", padx=14, pady=(14, 8)
         )
-        ctk.CTkLabel(self.rating_frame, text="評分功能預留", anchor="nw", font=self.font).grid(
-            row=1, column=0, sticky="nsew", padx=14, pady=8
+        ctk.CTkLabel(self.rating_frame, text="歌曲評分", anchor="w", font=self.section_font).grid(
+            row=1, column=0, sticky="ew", padx=14, pady=(4, 6)
         )
+        self.rating_song_label = ctk.CTkLabel(
+            self.rating_frame,
+            text="目前沒有歌曲",
+            anchor="w",
+            justify="left",
+            wraplength=220,
+            font=self.font,
+        )
+        self.rating_song_label.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 8))
+        self.rating_value_label = ctk.CTkLabel(self.rating_frame, text="5 / 10", font=self.section_font)
+        self.rating_value_label.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 4))
+        ctk.CTkSlider(
+            self.rating_frame,
+            from_=0,
+            to=10,
+            number_of_steps=10,
+            variable=self.rating_score_var,
+            command=lambda value: self._update_rating_label(value),
+        ).grid(row=4, column=0, sticky="ew", padx=14, pady=4)
+        ctk.CTkOptionMenu(
+            self.rating_frame,
+            values=["影響演算法", "單純評分"],
+            variable=self.rating_type_var,
+            font=self.font,
+        ).grid(row=5, column=0, sticky="ew", padx=14, pady=6)
+        self.submit_rating_button = ctk.CTkButton(
+            self.rating_frame,
+            text="送出評分",
+            command=self.submit_current_song_rating,
+            font=self.button_font,
+            state="disabled",
+        )
+        self.submit_rating_button.grid(row=6, column=0, sticky="ew", padx=14, pady=(6, 8))
+        self.rating_status_label = ctk.CTkLabel(
+            self.rating_frame,
+            text="",
+            anchor="w",
+            justify="left",
+            wraplength=220,
+            font=self.font,
+        )
+        self.rating_status_label.grid(row=7, column=0, sticky="ew", padx=14, pady=(0, 12))
+
+        ctk.CTkLabel(self.rating_frame, text="歌手評分", anchor="w", font=self.section_font).grid(
+            row=8, column=0, sticky="ew", padx=14, pady=(8, 6)
+        )
+        self.artist_rating_song_label = ctk.CTkLabel(
+            self.rating_frame,
+            text="目前沒有歌手",
+            anchor="w",
+            justify="left",
+            wraplength=220,
+            font=self.font,
+        )
+        self.artist_rating_song_label.grid(row=9, column=0, sticky="ew", padx=14, pady=(0, 8))
+        self.artist_rating_value_label = ctk.CTkLabel(self.rating_frame, text="5 / 10", font=self.section_font)
+        self.artist_rating_value_label.grid(row=10, column=0, sticky="ew", padx=14, pady=(0, 4))
+        ctk.CTkSlider(
+            self.rating_frame,
+            from_=0,
+            to=10,
+            number_of_steps=10,
+            variable=self.artist_rating_score_var,
+            command=lambda value: self._update_artist_rating_label(value),
+        ).grid(row=11, column=0, sticky="ew", padx=14, pady=4)
+        ctk.CTkOptionMenu(
+            self.rating_frame,
+            values=["影響演算法", "單純評分"],
+            variable=self.artist_rating_type_var,
+            font=self.font,
+        ).grid(row=12, column=0, sticky="ew", padx=14, pady=6)
+        self.submit_artist_rating_button = ctk.CTkButton(
+            self.rating_frame,
+            text="送出歌手評分",
+            command=self.submit_current_artist_rating,
+            font=self.button_font,
+            state="disabled",
+        )
+        self.submit_artist_rating_button.grid(row=13, column=0, sticky="ew", padx=14, pady=(6, 8))
+        self.artist_rating_status_label = ctk.CTkLabel(
+            self.rating_frame,
+            text="",
+            anchor="w",
+            justify="left",
+            wraplength=220,
+            font=self.font,
+        )
+        self.artist_rating_status_label.grid(row=14, column=0, sticky="ew", padx=14, pady=(0, 12))
 
         self.status_label = ctk.CTkLabel(self.center_frame, text="", anchor="w", font=self.font)
         self.status_label.grid(row=7, column=0, sticky="ew", padx=18, pady=(0, 12))
@@ -281,10 +379,12 @@ class PlayerView(ctk.CTkFrame):
             self.now_title_label.configure(text="尚未播放")
             self.now_artist_label.configure(text="")
             self.cover_label.configure(image=self.default_cover_image)
+            self._refresh_rating_panel(None)
             return
         self.now_title_label.configure(text=self._display_song_name(current_song))
         self.now_artist_label.configure(text=self._artist_name(current_song))
         self._refresh_cover(current_song)
+        self._refresh_rating_panel(current_song)
 
     def _refresh_cover(self, song: Song) -> None:
         if song.youtube_video_id in self.cover_images:
@@ -310,6 +410,119 @@ class PlayerView(ctk.CTkFrame):
 
     def _display_song_name(self, song: Song) -> str:
         return build_song_name(song.artist_id, song.song_name)
+
+    def _refresh_rating_panel(self, song: Song | None) -> None:
+        if song is None or song.id is None:
+            self.current_rating_song_id = None
+            self.song_rating_submitted_for_current_play = False
+            self.artist_rating_submitted_for_current_play = False
+            self._reset_rating_controls()
+            self.rating_song_label.configure(text="目前沒有歌曲")
+            self.rating_status_label.configure(text="")
+            self.submit_rating_button.configure(state="disabled")
+            self.artist_rating_song_label.configure(text="目前沒有歌手")
+            self.artist_rating_status_label.configure(text="")
+            self.submit_artist_rating_button.configure(state="disabled")
+            return
+        if song.id != self.current_rating_song_id:
+            self.current_rating_song_id = song.id
+            self.song_rating_submitted_for_current_play = False
+            self.artist_rating_submitted_for_current_play = False
+            self._reset_rating_controls()
+        self.rating_song_label.configure(text=self._display_song_name(song))
+        self.rating_status_label.configure(text=self._song_rating_status_text(song))
+        self.submit_rating_button.configure(state=self._song_rating_button_state(song))
+        self.artist_rating_song_label.configure(text=f"{self._artist_name(song)}\n{song.artist_id}")
+        self.artist_rating_status_label.configure(text=self._artist_rating_status_text(song.artist_id))
+        self.submit_artist_rating_button.configure(state=self._artist_rating_button_state(song.artist_id))
+
+    def submit_current_song_rating(self) -> None:
+        song = self.playback_service.current_song()
+        if song is None or song.id is None:
+            self.set_status("目前沒有可評分的歌曲。", error=True)
+            return
+        score = int(round(self.rating_score_var.get()))
+        affects_algorithm = self.rating_type_var.get() == "影響演算法"
+        try:
+            self.rating_repository.add_song_rating(
+                song.id,
+                score,
+                affects_algorithm=affects_algorithm,
+                enforce_daily_limit=False,
+            )
+        except Exception as exc:
+            self.set_status(str(exc), error=True)
+            self.rating_status_label.configure(text=self._song_rating_status_text(song))
+            self.submit_rating_button.configure(state=self._song_rating_button_state(song))
+            return
+        self.song_rating_submitted_for_current_play = True
+        self.rating_status_label.configure(text=self._song_rating_status_text(song))
+        self.submit_rating_button.configure(state="disabled")
+        self.set_status(f"已送出歌曲評分：{score}/10")
+
+    def submit_current_artist_rating(self) -> None:
+        song = self.playback_service.current_song()
+        if song is None:
+            self.set_status("目前沒有可評分的歌手。", error=True)
+            return
+        score = int(round(self.artist_rating_score_var.get()))
+        affects_algorithm = self.artist_rating_type_var.get() == "影響演算法"
+        try:
+            self.rating_repository.add_artist_rating(
+                song.artist_id,
+                score,
+                affects_algorithm=affects_algorithm,
+                enforce_daily_limit=False,
+            )
+        except Exception as exc:
+            self.set_status(str(exc), error=True)
+            self.artist_rating_status_label.configure(text=self._artist_rating_status_text(song.artist_id))
+            self.submit_artist_rating_button.configure(state=self._artist_rating_button_state(song.artist_id))
+            return
+        self.artist_rating_submitted_for_current_play = True
+        self.artist_rating_status_label.configure(text=self._artist_rating_status_text(song.artist_id))
+        self.submit_artist_rating_button.configure(state="disabled")
+        self.set_status(f"已送出歌手評分：{score}/10")
+
+    def _song_rating_status_text(self, song: Song) -> str:
+        if song.id is None:
+            return "尚未記錄評分"
+        count = self.rating_repository.song_rating_count(song.id)
+        return f"已記錄 {count} 筆評分"
+
+    def _artist_rating_status_text(self, artist_id: str) -> str:
+        count = self.rating_repository.artist_rating_count(artist_id)
+        return f"已記錄 {count} 筆評分"
+
+    def _song_rating_button_state(self, song: Song) -> str:
+        if song.id is None:
+            return "disabled"
+        if self.song_rating_submitted_for_current_play:
+            return "disabled"
+        return "normal"
+
+    def _artist_rating_button_state(self, artist_id: str) -> str:
+        if self.artist_rating_submitted_for_current_play:
+            return "disabled"
+        return "normal"
+
+    def _reset_rating_controls(self) -> None:
+        self.rating_score_var.set(5)
+        self.rating_type_var.set("影響演算法")
+        self.rating_value_label.configure(text="5 / 10")
+        self.artist_rating_score_var.set(5)
+        self.artist_rating_type_var.set("影響演算法")
+        self.artist_rating_value_label.configure(text="5 / 10")
+
+    def _update_rating_label(self, value) -> None:
+        score = int(round(float(value)))
+        self.rating_score_var.set(score)
+        self.rating_value_label.configure(text=f"{score} / 10")
+
+    def _update_artist_rating_label(self, value) -> None:
+        score = int(round(float(value)))
+        self.artist_rating_score_var.set(score)
+        self.artist_rating_value_label.configure(text=f"{score} / 10")
 
     def _start_slider_drag(self) -> None:
         self.is_dragging_slider = True
