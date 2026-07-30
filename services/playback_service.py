@@ -1,5 +1,7 @@
 from pathlib import Path
+import random
 
+from database.rating_repository import RatingRepository
 from models.song import Song
 from services.settings_service import SettingsService
 
@@ -10,10 +12,20 @@ except Exception:  # pragma: no cover - depends on local VLC installation
 
 
 class PlaybackService:
-    def __init__(self, settings_service: SettingsService | None = None) -> None:
+    def __init__(
+        self,
+        settings_service: SettingsService | None = None,
+        rating_repository: RatingRepository | None = None,
+    ) -> None:
         self.settings_service = settings_service or SettingsService()
+        self.rating_repository = rating_repository or RatingRepository()
         self.songs: list[Song] = []
         self.current_index = 0
+        self.preview_next_index: int | None = None
+        self.forced_next_index: int | None = None
+        self.suppress_previous_display = False
+        self.play_history_indices: list[int] = []
+        self.play_history_ids: list[int] = []
         self.instance = None
         self.player = None
         self.volume = self.settings_service.get_volume()
@@ -29,6 +41,12 @@ class PlaybackService:
         self.songs = [song for song in songs if Path(song.file_path).exists()]
         if self.current_index >= len(self.songs):
             self.current_index = 0
+        self.preview_next_index = None
+        self.forced_next_index = None
+        self.suppress_previous_display = False
+        self.play_history_indices.clear()
+        self.play_history_ids.clear()
+        self._remember_current_song()
 
     def current_song(self) -> Song | None:
         if not self.songs:
@@ -38,6 +56,10 @@ class PlaybackService:
     def previous_song(self) -> Song | None:
         if not self.songs:
             return None
+        if self.suppress_previous_display:
+            return None
+        if len(self.play_history_indices) >= 2:
+            return self.songs[self.play_history_indices[-2]]
         index = self.current_index - 1
         if index < 0:
             return None
@@ -46,6 +68,11 @@ class PlaybackService:
     def next_song(self) -> Song | None:
         if not self.songs:
             return None
+        if self.forced_next_index is not None and 0 <= self.forced_next_index < len(self.songs):
+            return self.songs[self.forced_next_index]
+        if self.get_play_order() == "random":
+            index = self._preview_random_next_index()
+            return self.songs[index] if index is not None else None
         index = self.current_index + 1
         if index >= len(self.songs):
             return None
@@ -60,6 +87,7 @@ class PlaybackService:
         self.player.set_media(media)
         self.player.audio_set_volume(self.volume)
         self.player.play()
+        self._remember_current_song()
 
     def load_current_paused(self) -> None:
         self._require_player()
@@ -70,6 +98,7 @@ class PlaybackService:
         self.player.set_media(media)
         self.player.audio_set_volume(self.volume)
         self.player.stop()
+        self._remember_current_song()
 
     def toggle_play_pause(self) -> bool:
         self._require_player()
@@ -85,9 +114,12 @@ class PlaybackService:
         return True
 
     def play_next(self, *, autoplay: bool = True) -> bool:
-        if self.next_song() is None:
+        next_index = self._next_index()
+        if next_index is None:
             return False
-        self.current_index += 1
+        self.current_index = next_index
+        self.forced_next_index = None
+        self.suppress_previous_display = False
         if autoplay:
             self.play_current()
         else:
@@ -95,13 +127,43 @@ class PlaybackService:
         return True
 
     def play_previous(self, *, autoplay: bool = True) -> bool:
-        if self.previous_song() is None:
+        previous_index = self._previous_index()
+        if previous_index is None:
             return False
-        self.current_index -= 1
+        old_current_index = self.current_index
+        self.current_index = previous_index
+        self.forced_next_index = old_current_index
+        self.preview_next_index = None
+        self.suppress_previous_display = True
+        if self.play_history_indices and self.play_history_indices[-1] == old_current_index:
+            self.play_history_indices.pop()
         if autoplay:
             self.play_current()
         else:
             self.load_current_paused()
+        return True
+
+    def restart_with_current_settings(self, *, autoplay: bool = False) -> bool:
+        if not self.songs:
+            return False
+        self.play_history_ids.clear()
+        self.play_history_indices.clear()
+        self.preview_next_index = None
+        self.forced_next_index = None
+        self.suppress_previous_display = False
+        if self.get_play_order() == "random":
+            indices = list(range(len(self.songs)))
+            self.current_index = self._weighted_random_index(indices) if self.get_random_mode() == "rating" else random.choice(indices)
+        else:
+            self.current_index = 0
+        if autoplay:
+            self.play_current()
+        else:
+            self.load_current_paused()
+        self.suppress_previous_display = True
+        self.preview_next_index = None
+        if self.get_play_order() == "random":
+            self._preview_random_next_index()
         return True
 
     def stop(self) -> None:
@@ -142,6 +204,126 @@ class PlaybackService:
 
     def get_volume(self) -> int:
         return self.volume
+
+    def get_play_order(self) -> str:
+        return self.settings_service.get_play_order()
+
+    def set_play_order(self, play_order: str) -> None:
+        self.settings_service.set_play_order(play_order)
+        self.preview_next_index = None
+        self.forced_next_index = None
+        self.suppress_previous_display = False
+
+    def get_random_mode(self) -> str:
+        return self.settings_service.get_random_mode()
+
+    def set_random_mode(self, random_mode: str) -> None:
+        self.settings_service.set_random_mode(random_mode)
+        self.preview_next_index = None
+        self.forced_next_index = None
+
+    def get_repeat_gap(self) -> int:
+        return self.settings_service.get_repeat_gap()
+
+    def set_repeat_gap(self, repeat_gap: int) -> None:
+        self.settings_service.set_repeat_gap(repeat_gap)
+        self.preview_next_index = None
+
+    def save_playback_settings(
+        self,
+        *,
+        play_order: str,
+        random_mode: str,
+        repeat_gap: int,
+        reset_next: bool,
+    ) -> None:
+        self.settings_service.set_play_order(play_order)
+        self.settings_service.set_random_mode(random_mode)
+        self.settings_service.set_repeat_gap(repeat_gap)
+        if reset_next:
+            self.preview_next_index = None
+            self.forced_next_index = None
+            self.suppress_previous_display = False
+
+    def _next_index(self) -> int | None:
+        if not self.songs:
+            return None
+        if self.forced_next_index is not None and 0 <= self.forced_next_index < len(self.songs):
+            return self.forced_next_index
+        if self.get_play_order() == "random":
+            index = self._preview_random_next_index()
+            self.preview_next_index = None
+            return index
+        index = self.current_index + 1
+        return index if index < len(self.songs) else None
+
+    def _previous_index(self) -> int | None:
+        if not self.songs:
+            return None
+        if len(self.play_history_indices) >= 2:
+            return self.play_history_indices[-2]
+        index = self.current_index - 1
+        return index if index >= 0 else None
+
+    def _choose_random_next_index(self) -> int | None:
+        if not self.songs:
+            return None
+        candidates = self._random_candidate_indices()
+        if not candidates:
+            return None
+        if self.get_random_mode() == "rating":
+            return self._weighted_random_index(candidates)
+        return random.choice(candidates)
+
+    def _preview_random_next_index(self) -> int | None:
+        if self.preview_next_index is not None and 0 <= self.preview_next_index < len(self.songs):
+            return self.preview_next_index
+        self.preview_next_index = self._choose_random_next_index()
+        return self.preview_next_index
+
+    def _random_candidate_indices(self) -> list[int]:
+        recent_ids = set(self.play_history_ids[-self.get_repeat_gap() :])
+        candidates = [
+            index
+            for index, song in enumerate(self.songs)
+            if index != self.current_index and (song.id is None or song.id not in recent_ids)
+        ]
+        if candidates:
+            return candidates
+        fallback = [index for index in range(len(self.songs)) if index != self.current_index]
+        return fallback or [self.current_index]
+
+    def _weighted_random_index(self, candidates: list[int]) -> int:
+        weights = []
+        for index in candidates:
+            song = self.songs[index]
+            score = self._song_random_weight_score(song)
+            weights.append(max(score, 0.1))
+        return random.choices(candidates, weights=weights, k=1)[0]
+
+    def _song_random_weight_score(self, song: Song) -> float:
+        song_score = self.rating_repository.song_algorithm_score(song.id) if song.id is not None else 5.0
+        artist_score = self.rating_repository.artist_algorithm_score(song.artist_id)
+        random_bonus = random.uniform(1, 5)
+        return song_score + (artist_score / 2) + random_bonus
+
+    def _remember_current_song(self) -> None:
+        song = self.current_song()
+        if self.current_index < 0 or self.current_index >= len(self.songs):
+            return
+        added_history = False
+        if not self.play_history_indices or self.play_history_indices[-1] != self.current_index:
+            self.play_history_indices.append(self.current_index)
+            added_history = True
+        if song is None or song.id is None:
+            return
+        if added_history:
+            self.play_history_ids.append(song.id)
+        max_history = max(self.get_repeat_gap(), 1) * 3
+        if len(self.play_history_ids) > max_history:
+            self.play_history_ids = self.play_history_ids[-max_history:]
+        if len(self.play_history_indices) > max_history:
+            self.play_history_indices = self.play_history_indices[-max_history:]
 
     def _require_player(self) -> None:
         if not self.available or self.instance is None or self.player is None:

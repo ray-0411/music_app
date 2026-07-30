@@ -39,6 +39,8 @@ class PlayerView(ctk.CTkFrame):
         self.rating_type_var = ctk.StringVar(value="影響演算法")
         self.artist_rating_score_var = ctk.IntVar(value=5)
         self.artist_rating_type_var = ctk.StringVar(value="影響演算法")
+        self.play_order_var = ctk.StringVar(value="照順序")
+        self.random_mode_var = ctk.StringVar(value="相同機率")
         self.current_rating_song_id: int | None = None
         self.song_rating_submitted_for_current_play = False
         self.artist_rating_submitted_for_current_play = False
@@ -76,9 +78,19 @@ class PlayerView(ctk.CTkFrame):
         ctk.CTkLabel(self.queue_frame, text="播放資訊", anchor="w", font=self.title_font).grid(
             row=0, column=0, sticky="ew", padx=14, pady=(14, 10)
         )
-        self.previous_label = self._make_queue_label("上一首", 1)
-        self.current_label = self._make_queue_label("本首", 2)
-        self.next_label = self._make_queue_label("下一首", 3)
+        self.previous_queue = self._make_queue_item("上一首", 1)
+        self.current_queue = self._make_queue_item("本首", 2)
+        self.next_queue = self._make_queue_item("下一首", 3)
+        self.mechanism_label = ctk.CTkLabel(
+            self.queue_frame,
+            text="目前機制\n-",
+            anchor="sw",
+            justify="left",
+            wraplength=230,
+            font=self.font,
+        )
+        self.mechanism_label.grid(row=4, column=0, sticky="sew", padx=14, pady=(18, 14))
+        self.queue_frame.grid_rowconfigure(4, weight=1)
 
         self.center_frame = ctk.CTkFrame(self.play_page)
         self.center_frame.grid(row=0, column=1, sticky="nsew", padx=6, pady=8)
@@ -265,29 +277,77 @@ class PlayerView(ctk.CTkFrame):
     def _build_preference_page(self) -> None:
         ctk.CTkLabel(
             self.preference_page,
-            text="標籤偏好設定",
+            text="播放設定",
             anchor="w",
             font=self.title_font,
         ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=18, pady=(18, 8))
-        filter_frame = ctk.CTkFrame(self.preference_page)
-        filter_frame.grid(row=1, column=0, sticky="nsew", padx=(18, 8), pady=(8, 18))
-        filter_frame.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(filter_frame, text="篩選標籤", anchor="w", font=self.section_font).grid(
-            row=0, column=0, sticky="ew", padx=14, pady=(14, 8)
+
+        playback_frame = ctk.CTkFrame(self.preference_page)
+        playback_frame.grid(row=1, column=0, sticky="nsew", padx=(18, 8), pady=(8, 18))
+        playback_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(playback_frame, text="下一首規則", anchor="w", font=self.section_font).grid(
+            row=0, column=0, columnspan=2, sticky="ew", padx=14, pady=(14, 10)
         )
-        ctk.CTkLabel(filter_frame, text="只播放符合某些標籤的歌曲。功能預留。", anchor="nw", font=self.font).grid(
-            row=1, column=0, sticky="nsew", padx=14, pady=8
+        ctk.CTkLabel(playback_frame, text="播放順序", anchor="w", font=self.font).grid(
+            row=1, column=0, sticky="w", padx=14, pady=8
         )
+        self.play_order_menu = ctk.CTkOptionMenu(
+            playback_frame,
+            values=["照順序", "隨機"],
+            variable=self.play_order_var,
+            command=lambda _value: self._sync_random_controls_state(),
+            font=self.font,
+        )
+        self.play_order_menu.grid(row=1, column=1, sticky="ew", padx=14, pady=8)
+        ctk.CTkLabel(playback_frame, text="隨機方式", anchor="w", font=self.font).grid(
+            row=2, column=0, sticky="w", padx=14, pady=8
+        )
+        self.random_mode_menu = ctk.CTkOptionMenu(
+            playback_frame,
+            values=["相同機率", "評分權重"],
+            variable=self.random_mode_var,
+            font=self.font,
+        )
+        self.random_mode_menu.grid(row=2, column=1, sticky="ew", padx=14, pady=8)
+        ctk.CTkLabel(playback_frame, text="同曲間隔", anchor="w", font=self.font).grid(
+            row=3, column=0, sticky="w", padx=14, pady=8
+        )
+        self.repeat_gap_entry = ctk.CTkEntry(playback_frame, font=self.font)
+        self.repeat_gap_entry.grid(row=3, column=1, sticky="ew", padx=14, pady=8)
+        button_row = ctk.CTkFrame(playback_frame, fg_color="transparent")
+        button_row.grid(row=4, column=1, sticky="w", padx=14, pady=(14, 8))
+        ctk.CTkButton(
+            button_row,
+            text="開始",
+            command=self.start_with_playback_settings,
+            font=self.button_font,
+            width=92,
+        ).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(
+            button_row,
+            text="儲存設定",
+            command=self.save_playback_settings_only,
+            font=self.button_font,
+            width=112,
+        ).pack(side="left")
+        self.playback_setting_status_label = ctk.CTkLabel(
+            playback_frame,
+            text="",
+            anchor="w",
+            font=self.font,
+        )
+        self.playback_setting_status_label.grid(row=5, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 14))
 
         weight_frame = ctk.CTkFrame(self.preference_page)
         weight_frame.grid(row=1, column=1, sticky="nsew", padx=(8, 18), pady=(8, 18))
         weight_frame.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(weight_frame, text="加權標籤", anchor="w", font=self.section_font).grid(
+        ctk.CTkLabel(weight_frame, text="標籤規則", anchor="w", font=self.section_font).grid(
             row=0, column=0, sticky="ew", padx=14, pady=(14, 8)
         )
-        ctk.CTkLabel(weight_frame, text="提高某些標籤歌曲出現機率。功能預留。", anchor="nw", font=self.font).grid(
+        ctk.CTkLabel(weight_frame, text="標籤篩選與標籤加權功能預留。", anchor="nw", font=self.font).grid(
             row=1, column=0, sticky="nsew", padx=14, pady=8
         )
+        self._load_playback_settings_into_controls()
 
     def show_play_page(self) -> None:
         self.preference_page.grid_remove()
@@ -295,19 +355,111 @@ class PlayerView(ctk.CTkFrame):
 
     def show_preference_page(self) -> None:
         self.play_page.grid_remove()
+        self._load_playback_settings_into_controls()
         self.preference_page.grid()
 
-    def _make_queue_label(self, title: str, row: int) -> ctk.CTkLabel:
-        label = ctk.CTkLabel(
-            self.queue_frame,
-            text=f"{title}\n-",
+    def _load_playback_settings_into_controls(self) -> None:
+        self.play_order_var.set("隨機" if self.playback_service.get_play_order() == "random" else "照順序")
+        self.random_mode_var.set("評分權重" if self.playback_service.get_random_mode() == "rating" else "相同機率")
+        if hasattr(self, "repeat_gap_entry"):
+            self.repeat_gap_entry.delete(0, "end")
+            self.repeat_gap_entry.insert(0, str(self.playback_service.get_repeat_gap()))
+        self._sync_random_controls_state()
+
+    def start_with_playback_settings(self) -> None:
+        try:
+            play_order, random_mode, repeat_gap = self._selected_playback_settings()
+        except ValueError as exc:
+            self.playback_setting_status_label.configure(text=str(exc), text_color="#b3261e")
+            return
+        try:
+            self.playback_service.save_playback_settings(
+                play_order=play_order,
+                random_mode=random_mode,
+                repeat_gap=repeat_gap,
+                reset_next=True,
+            )
+            started = self.playback_service.restart_with_current_settings(autoplay=False)
+        except Exception as exc:
+            self.playback_setting_status_label.configure(text=str(exc), text_color="#b3261e")
+            return
+        if not started:
+            self.playback_setting_status_label.configure(text="沒有可播放的 MP3。", text_color="#b3261e")
+            return
+        self.play_button.configure(text="▶")
+        self.playback_setting_status_label.configure(text="已套用設定並重新開始。", text_color="#1b6e3c")
+        self._sync_random_controls_state()
+        self._refresh_song_labels()
+
+    def save_playback_settings_only(self) -> None:
+        try:
+            play_order, random_mode, repeat_gap = self._selected_playback_settings()
+        except ValueError as exc:
+            self.playback_setting_status_label.configure(text=str(exc), text_color="#b3261e")
+            return
+        try:
+            self.playback_service.save_playback_settings(
+                play_order=play_order,
+                random_mode=random_mode,
+                repeat_gap=repeat_gap,
+                reset_next=False,
+            )
+        except Exception as exc:
+            self.playback_setting_status_label.configure(text=str(exc), text_color="#b3261e")
+            return
+        self.playback_setting_status_label.configure(text="已儲存設定，從之後抽歌開始套用。", text_color="#1b6e3c")
+        self._sync_random_controls_state()
+        self._refresh_song_labels()
+
+    def _selected_playback_settings(self) -> tuple[str, str, int]:
+        try:
+            repeat_gap = int(self.repeat_gap_entry.get().strip())
+            if repeat_gap < 0:
+                raise ValueError
+        except ValueError:
+            raise ValueError("同曲間隔必須是 0 或正整數。")
+        play_order = "random" if self.play_order_var.get() == "隨機" else "sequential"
+        random_mode = "rating" if self.random_mode_var.get() == "評分權重" else "equal"
+        return play_order, random_mode, repeat_gap
+
+    def _mechanism_text(self) -> str:
+        if self.playback_service.get_play_order() == "sequential":
+            return "照順序播放"
+        random_mode = "評分權重" if self.playback_service.get_random_mode() == "rating" else "相同機率"
+        repeat_gap = self.playback_service.get_repeat_gap()
+        gap_text = "不限制同曲重複" if repeat_gap == 0 else f"同曲間隔至少 {repeat_gap} 首"
+        return f"隨機 / {random_mode}\n{gap_text}"
+
+    def _sync_random_controls_state(self) -> None:
+        if not hasattr(self, "random_mode_menu"):
+            return
+        self.random_mode_menu.configure(state="normal" if self.play_order_var.get() == "隨機" else "disabled")
+
+    def _make_queue_item(self, title: str, row: int) -> dict[str, ctk.CTkLabel]:
+        frame = ctk.CTkFrame(self.queue_frame, fg_color="transparent")
+        frame.grid(row=row, column=0, sticky="ew", padx=14, pady=8)
+        frame.grid_columnconfigure(0, weight=1)
+        title_label = ctk.CTkLabel(frame, text=title, anchor="w", font=self.font)
+        title_label.grid(row=0, column=0, sticky="ew")
+        song_label = ctk.CTkLabel(
+            frame,
+            text="-",
+            anchor="w",
+            justify="left",
+            wraplength=230,
+            font=self.section_font,
+        )
+        song_label.grid(row=1, column=0, sticky="ew", pady=(3, 0))
+        artist_label = ctk.CTkLabel(
+            frame,
+            text="",
             anchor="w",
             justify="left",
             wraplength=230,
             font=self.font,
         )
-        label.grid(row=row, column=0, sticky="ew", padx=14, pady=8)
-        return label
+        artist_label.grid(row=2, column=0, sticky="ew", pady=(2, 0))
+        return {"song": song_label, "artist": artist_label}
 
     def reload_playlist(self) -> None:
         self.artist_names = {
@@ -372,9 +524,12 @@ class PlayerView(ctk.CTkFrame):
         previous_song = self.playback_service.previous_song()
         current_song = self.playback_service.current_song()
         next_song = self.playback_service.next_song()
-        self.previous_label.configure(text=f"上一首\n{self._song_label(previous_song)}")
-        self.current_label.configure(text=f"本首\n{self._song_label(current_song)}")
-        self.next_label.configure(text=f"下一首\n{self._song_label(next_song)}")
+        self.prev_button.configure(state="normal" if previous_song else "disabled")
+        self.next_button.configure(state="normal" if next_song else "disabled")
+        self._update_queue_item(self.previous_queue, previous_song)
+        self._update_queue_item(self.current_queue, current_song)
+        self._update_queue_item(self.next_queue, next_song)
+        self.mechanism_label.configure(text=f"目前機制\n{self._mechanism_text()}")
         if current_song is None:
             self.now_title_label.configure(text="尚未播放")
             self.now_artist_label.configure(text="")
@@ -404,6 +559,14 @@ class PlayerView(ctk.CTkFrame):
         if song is None:
             return "-"
         return f"{self._artist_name(song)}\n{self._display_song_name(song)}"
+
+    def _update_queue_item(self, item: dict[str, ctk.CTkLabel], song: Song | None) -> None:
+        if song is None:
+            item["song"].configure(text="-")
+            item["artist"].configure(text="")
+            return
+        item["song"].configure(text=self._display_song_name(song))
+        item["artist"].configure(text=self._artist_name(song))
 
     def _artist_name(self, song: Song) -> str:
         return self.artist_names.get(song.artist_id.lower(), song.artist_id)

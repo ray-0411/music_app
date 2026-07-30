@@ -49,7 +49,7 @@ class App(ctk.CTk):
         self.thumbnail_service = ThumbnailService()
         self.download_service = DownloadService(self.song_repository, self.thumbnail_service)
         self.song_service = SongService(self.song_repository)
-        self.playback_service = PlaybackService()
+        self.playback_service = PlaybackService(rating_repository=self.rating_repository)
 
         self.font = base_font()
         self.nav_font = button_font()
@@ -171,7 +171,7 @@ class App(ctk.CTk):
         self.sections = {
             "player": {
                 "label": "音樂播放器",
-                "subnav": [("播放區", "player:play"), ("標籤偏好", "player:preferences")],
+                "subnav": [("播放區", "player:play"), ("設定", "player:preferences")],
             },
             "artists": {
                 "label": "歌手管理",
