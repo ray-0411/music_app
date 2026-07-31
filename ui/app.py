@@ -8,6 +8,7 @@ from database.artist_repository import ArtistRepository
 from database.rating_repository import RatingRepository
 from database.song_repository import SongRepository
 from database.tag_repository import TagRepository
+from database.video_stats_repository import VideoStatsRepository
 from services.download_service import DownloadService
 from services.playback_service import PlaybackService
 from services.song_service import SongService
@@ -45,6 +46,7 @@ class App(ctk.CTk):
         self.rating_repository = RatingRepository()
         self.tag_repository = TagRepository("artist")
         self.song_tag_repository = TagRepository("song")
+        self.video_stats_repository = VideoStatsRepository()
         self.youtube_service = YouTubeService()
         self.thumbnail_service = ThumbnailService()
         self.download_service = DownloadService(self.song_repository, self.thumbnail_service)
@@ -93,6 +95,7 @@ class App(ctk.CTk):
             youtube_service=self.youtube_service,
             thumbnail_service=self.thumbnail_service,
             download_service=self.download_service,
+            video_stats_repository=self.video_stats_repository,
             on_downloads_changed=self._downloads_changed,
         )
         self.video_view.grid(row=0, column=0, sticky="nsew")
@@ -262,7 +265,7 @@ class App(ctk.CTk):
                 self.player_view.show_preference_page()
             else:
                 self.player_view.show_play_page()
-            self.player_view.reload_playlist()
+            self.player_view.refresh_display()
             page_key = "player"
         if page_key == "settings":
             self.refresh_settings_page()

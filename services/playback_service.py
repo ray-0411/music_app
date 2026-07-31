@@ -38,15 +38,25 @@ class PlaybackService:
                 self.available = False
 
     def load_playlist(self, songs: list[Song]) -> None:
+        current_song = self.current_song()
+        current_song_id = current_song.id if current_song else None
         self.songs = [song for song in songs if Path(song.file_path).exists()]
+        if current_song_id is not None:
+            matched_index = next(
+                (index for index, song in enumerate(self.songs) if song.id == current_song_id),
+                None,
+            )
+            if matched_index is not None:
+                self.current_index = matched_index
         if self.current_index >= len(self.songs):
             self.current_index = 0
-        self.preview_next_index = None
-        self.forced_next_index = None
-        self.suppress_previous_display = False
-        self.play_history_indices.clear()
-        self.play_history_ids.clear()
-        self._remember_current_song()
+            self.preview_next_index = None
+            self.forced_next_index = None
+            self.suppress_previous_display = False
+            self.play_history_indices.clear()
+            self.play_history_ids.clear()
+        if self.songs:
+            self._remember_current_song()
 
     def current_song(self) -> Song | None:
         if not self.songs:

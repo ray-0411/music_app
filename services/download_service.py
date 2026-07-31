@@ -8,6 +8,7 @@ from database.song_repository import SongRepository
 from models.artist import Artist
 from models.video import Video
 from services.thumbnail_service import ThumbnailService
+from services.yt_dlp_options import with_common_ytdlp_options
 from utils.filename import build_mp3_filename, build_song_name
 
 
@@ -62,7 +63,7 @@ class DownloadService:
         }
         try:
             progress_callback(video.youtube_video_id, "開始下載")
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with yt_dlp.YoutubeDL(with_common_ytdlp_options(options)) as ydl:
                 ydl.download([video.youtube_url])
             if not final_path.exists():
                 candidates = list(artist_dir.glob(f"{Path(file_name).stem}*.mp3"))

@@ -1,5 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from random import uniform
+from time import sleep
 
 import customtkinter as ctk
 from PIL import Image, ImageDraw
@@ -7,6 +9,7 @@ from PIL import Image, ImageDraw
 from config import APP_FONT_FAMILY, THUMBNAIL_SIZE, THUMBNAIL_WORKERS, VIDEO_BATCH_SIZE, VIDEO_PAGE_SIZE
 from database.artist_repository import ArtistRepository
 from database.song_repository import SongRepository
+from database.video_stats_repository import VideoStatsRepository
 from models.artist import Artist
 from models.video import Video
 from services.download_service import DownloadService
@@ -25,6 +28,7 @@ class VideoView(ctk.CTkFrame):
         youtube_service: YouTubeService,
         thumbnail_service: ThumbnailService,
         download_service: DownloadService,
+        video_stats_repository: VideoStatsRepository,
         on_downloads_changed=None,
     ) -> None:
         super().__init__(master, fg_color="transparent")
@@ -33,6 +37,7 @@ class VideoView(ctk.CTkFrame):
         self.youtube_service = youtube_service
         self.thumbnail_service = thumbnail_service
         self.download_service = download_service
+        self.video_stats_repository = video_stats_repository
         self.on_downloads_changed = on_downloads_changed
         self.worker_executor = ThreadPoolExecutor(max_workers=2)
         self.thumbnail_executor = ThreadPoolExecutor(max_workers=THUMBNAIL_WORKERS)
@@ -48,9 +53,13 @@ class VideoView(ctk.CTkFrame):
         self.has_more = False
         self.loading_more = False
         self.count_loading = False
+        self.stats_update_loading = False
+        self.video_load_token = 0
         self.selected: dict[str, ctk.BooleanVar] = {}
+        self.selected_video_ids: set[str] = set()
         self.rows: dict[str, dict] = {}
         self.details_requested: set[str] = set()
+        self.sort_mode = ctk.StringVar(value="最新")
         self.default_thumbnail = self._make_default_thumbnail()
         self.is_destroyed = False
         self.font = base_font()
@@ -84,14 +93,25 @@ class VideoView(ctk.CTkFrame):
         self.select_all_button.pack(side="left", padx=(12, 6), pady=10)
         self.clear_button = ctk.CTkButton(actions, text="取消全選", width=88, command=self.clear_selection, font=self.button_font)
         self.clear_button.pack(side="left", padx=6, pady=10)
-        self.download_button = ctk.CTkButton(actions, text="批次下載", width=110, command=self.download_selected, font=self.button_font)
-        self.download_button.pack(side="left", padx=6, pady=10)
+        self.sort_menu = ctk.CTkOptionMenu(
+            actions,
+            values=["最新", "熱門"],
+            variable=self.sort_mode,
+            command=lambda _value: self.load_videos(),
+            font=self.font,
+            width=130,
+        )
+        self.sort_menu.pack(side="left", padx=6, pady=10)
         self.prev_button = ctk.CTkButton(actions, text="上一頁", width=88, command=self.prev_page, font=self.button_font)
         self.prev_button.pack(side="left", padx=6, pady=10)
         self.next_button = ctk.CTkButton(actions, text="下一頁", width=88, command=self.next_page, font=self.button_font)
         self.next_button.pack(side="left", padx=6, pady=10)
         self.page_label = ctk.CTkLabel(actions, text="第 0 / 0 頁", font=self.font)
         self.page_label.pack(side="left", padx=6, pady=10)
+        self.selected_count_label = ctk.CTkLabel(actions, text="已選 0 首", font=self.font)
+        self.selected_count_label.pack(side="left", padx=12, pady=10)
+        self.download_button = ctk.CTkButton(actions, text="批次下載", width=120, command=self.download_selected, font=self.button_font)
+        self.download_button.pack(side="right", padx=(6, 12), pady=10)
         self.video_list = ctk.CTkScrollableFrame(self)
         self.video_list.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.video_list.grid_columnconfigure(0, weight=1)
@@ -135,6 +155,7 @@ class VideoView(ctk.CTkFrame):
             if self._artist_label(artist) == label:
                 self.selected_artist = artist
                 break
+        self._clear_selection_state()
 
     def load_videos(self) -> None:
         if self.selected_artist is None:
@@ -147,23 +168,122 @@ class VideoView(ctk.CTkFrame):
         self.total_count = None
         self.has_more = False
         self.loading_more = False
+        self.stats_update_loading = False
+        self._clear_selection_state()
+        self.details_requested.clear()
+        self.video_load_token += 1
+        load_token = self.video_load_token
         self.render_videos()
-        self.set_status(f"正在取得前 {VIDEO_BATCH_SIZE} 部影片...")
+        popular_sort = self._is_popular_sort()
+        if popular_sort:
+            self.set_status("正在取得完整影片清單，準備用觀看數排序...")
+        else:
+            self.set_status(f"正在取得前 {VIDEO_BATCH_SIZE} 部影片（最新）...")
         future = self.worker_executor.submit(
-            self._load_videos_worker, self.selected_artist, 0
+            self._load_videos_worker, self.selected_artist, 0, popular_sort
         )
-        future.add_done_callback(lambda done: self._safe_after(self._handle_videos_loaded, done, False))
+        future.add_done_callback(lambda done: self._safe_after(self._handle_videos_loaded, done, False, load_token))
 
-    def _load_videos_worker(self, artist: Artist, start: int):
+    def _load_videos_worker(self, artist: Artist, start: int, popular_sort: bool):
+        limit = None if popular_sort else VIDEO_BATCH_SIZE
         result = self.youtube_service.list_channel_videos(
-            artist.youtube_url, start=start, limit=VIDEO_BATCH_SIZE
+            artist.youtube_url, start=start, limit=limit
         )
-        videos = self.song_repository.mark_video_states(artist.artist_id, result.videos)
+        videos = self.video_stats_repository.apply_cached_view_counts(result.videos)
+        videos = self.song_repository.mark_video_states(artist.artist_id, videos)
         return result, videos
 
-    def _handle_videos_loaded(self, future, append: bool) -> None:
+    def _is_popular_sort(self) -> bool:
+        return self.sort_mode.get() == "熱門"
+
+    def _start_background_view_count_update(self) -> None:
+        if self.stats_update_loading or not self.videos:
+            return
+        self.stats_update_loading = True
+        load_token = self.video_load_token
+        videos = list(self.videos)
+        future = self.worker_executor.submit(self._update_view_counts_worker, videos, load_token)
+        future.add_done_callback(lambda done: self._safe_after(self._handle_view_counts_updated, done, load_token))
+
+    def _update_view_counts_worker(self, videos: list[Video], load_token: int) -> tuple[list[Video], int]:
+        if not videos:
+            return [], 0
+        stale_ids = self.video_stats_repository.stale_video_ids(videos)
+        if not stale_ids:
+            self._safe_after(
+                self._set_status_for_token,
+                load_token,
+                f"觀看數快取仍在 7 天內，已使用快取排序 {len(videos)} 部影片。",
+            )
+            return [], 0
+        detailed_videos: list[Video] = []
+        total = len(stale_ids)
+        self._safe_after(self._set_status_for_token, load_token, f"正在更新觀看數：0/{total}（0%）")
+        stale_videos = [video for video in videos if video.youtube_video_id in stale_ids]
+        for completed, video in enumerate(stale_videos, start=1):
+            if load_token != self.video_load_token:
+                return detailed_videos, total
+            try:
+                detailed = self.youtube_service.get_video_details(video)
+            except Exception:
+                detailed = None
+            if detailed and detailed.view_count == -1:
+                self.video_stats_repository.mark_view_count_unavailable(video.youtube_video_id)
+            elif detailed and detailed.view_count is not None:
+                updated_video = Video(
+                    youtube_video_id=video.youtube_video_id,
+                    youtube_url=video.youtube_url,
+                    title=video.title,
+                    thumbnail_url=video.thumbnail_url,
+                    duration=video.duration,
+                    upload_date=video.upload_date,
+                    view_count=detailed.view_count,
+                    download_status=video.download_status,
+                    is_downloaded=video.is_downloaded,
+                    file_missing=video.file_missing,
+                )
+                detailed_videos.append(updated_video)
+                self.video_stats_repository.save_view_count(video.youtube_video_id, detailed.view_count)
+            else:
+                self.video_stats_repository.mark_view_count_failed(video.youtube_video_id)
+            percent = int(completed * 100 / total)
+            self._safe_after(
+                self._set_status_for_token,
+                load_token,
+                f"正在更新觀看數：{completed}/{total}（{percent}%）",
+            )
+            if completed < total:
+                sleep(uniform(0.35, 0.9))
+        return detailed_videos, total
+
+    def _handle_view_counts_updated(self, future, load_token: int) -> None:
+        self.stats_update_loading = False
+        if load_token != self.video_load_token:
+            return
+        try:
+            detailed_videos, total = future.result()
+        except Exception as exc:
+            self.set_status(f"觀看數背景更新失敗：{exc}", error=True)
+            return
+        if not detailed_videos or not self._is_popular_sort():
+            return
+        detailed_by_id = {video.youtube_video_id: video for video in detailed_videos}
+        self.videos = [
+            detailed_by_id.get(video.youtube_video_id, video)
+            for video in self.videos
+        ]
+        self.videos.sort(
+            key=self._view_count_sort_key,
+            reverse=True,
+        )
+        self.apply_filter()
+        self.set_status(f"觀看數背景更新完成：{len(detailed_videos)}/{total}，已重新排序。")
+
+    def _handle_videos_loaded(self, future, append: bool, load_token: int) -> None:
         self.refresh_button.configure(state="normal")
         self.loading_more = False
+        if load_token != self.video_load_token:
+            return
         try:
             result, videos = future.result()
         except Exception as exc:
@@ -174,8 +294,15 @@ class VideoView(ctk.CTkFrame):
             self.videos.extend(video for video in videos if video.youtube_video_id not in existing_ids)
         else:
             self.videos = videos
+        if self._is_popular_sort():
+            self.videos.sort(
+                key=self._view_count_sort_key,
+                reverse=True,
+            )
         if result.total_count is not None:
             self.total_count = result.total_count
+        elif self._is_popular_sort():
+            self.total_count = len(self.videos)
         self.has_more = result.limited
         self.apply_filter()
         total_text = f" / 頻道共約 {self.total_count} 部" if self.total_count else ""
@@ -185,7 +312,9 @@ class VideoView(ctk.CTkFrame):
         if self.has_more:
             notice += " 接近最後一頁時會自動載入下一批。"
         self.set_status(notice)
-        if not append:
+        if self._is_popular_sort() and not append:
+            self._start_background_view_count_update()
+        if not append and not self._is_popular_sort():
             self._load_total_count_async()
 
     def apply_filter(self) -> None:
@@ -203,6 +332,8 @@ class VideoView(ctk.CTkFrame):
         self._scroll_video_list_to_top()
         self.rows.clear()
         self.selected.clear()
+        self._sync_selected_ids_with_available_videos()
+        self._update_selected_count()
         if not self.filtered_videos:
             self.page_label.configure(text="第 0 / 0 頁")
             ctk.CTkLabel(self.video_list, text="尚無影片資料", anchor="w", font=self.font).grid(
@@ -247,6 +378,8 @@ class VideoView(ctk.CTkFrame):
             self.render_videos()
 
     def _maybe_load_next_batch(self) -> None:
+        if self._is_popular_sort():
+            return
         if self.search_entry.get().strip():
             return
         page_end = (self.current_page + 1) * VIDEO_PAGE_SIZE
@@ -258,11 +391,19 @@ class VideoView(ctk.CTkFrame):
             return
         self.loading_more = True
         start = len(self.videos)
-        self.set_status(f"正在載入第 {start + 1} 到 {start + VIDEO_BATCH_SIZE} 部影片...")
+        popular_sort = self._is_popular_sort()
+        if popular_sort:
+            self.set_status(f"正在載入第 {start + 1} 到 {start + VIDEO_BATCH_SIZE} 部影片，並補齊觀看數排序...")
+        else:
+            self.set_status(f"正在載入第 {start + 1} 到 {start + VIDEO_BATCH_SIZE} 部影片...")
         future = self.worker_executor.submit(
-            self._load_videos_worker, self.selected_artist, start
+            self._load_videos_worker, self.selected_artist, start, popular_sort
         )
-        future.add_done_callback(lambda done: self._safe_after(self._handle_videos_loaded, done, True))
+        future.add_done_callback(
+            lambda done, load_token=self.video_load_token: self._safe_after(
+                self._handle_videos_loaded, done, True, load_token
+            )
+        )
 
     def _load_total_count_async(self) -> None:
         if self.selected_artist is None or self.count_loading:
@@ -288,30 +429,54 @@ class VideoView(ctk.CTkFrame):
 
     def _render_video_row(self, row_index: int, video: Video) -> None:
         frame = ctk.CTkFrame(self.video_list)
-        frame.grid(row=row_index, column=0, sticky="ew", padx=6, pady=6)
+        frame.grid(row=row_index, column=0, sticky="ew", padx=6, pady=3)
+        frame.grid_propagate(False)
+        frame.configure(height=112)
         frame.grid_columnconfigure(2, weight=1)
 
         selectable = not video.is_downloaded
-        var = ctk.BooleanVar(value=False)
+        var = ctk.BooleanVar(
+            value=video.is_downloaded or video.youtube_video_id in self.selected_video_ids
+        )
         self.selected[video.youtube_video_id] = var
-        checkbox = ctk.CTkCheckBox(frame, text="", variable=var, width=28)
-        checkbox.grid(row=0, column=0, rowspan=2, padx=(10, 6), pady=10)
+        checkbox = ctk.CTkCheckBox(
+            frame,
+            text="",
+            variable=var,
+            width=28,
+            command=lambda video_id=video.youtube_video_id, selected_var=var: self._selection_changed(
+                video_id, selected_var
+            ),
+        )
+        checkbox.grid(row=0, column=0, rowspan=2, padx=(10, 6), pady=5)
         if not selectable:
-            checkbox.configure(state="disabled")
+            checkbox.configure(
+                state="disabled",
+                fg_color="#8a8f98",
+                border_color="#8a8f98",
+                checkmark_color="#f4f7f2",
+            )
 
         thumbnail_label = ctk.CTkLabel(frame, image=self.default_thumbnail, text="")
-        thumbnail_label.grid(row=0, column=1, rowspan=2, padx=6, pady=10)
+        thumbnail_label.grid(row=0, column=1, rowspan=2, padx=6, pady=5)
 
-        title = ctk.CTkLabel(frame, text=video.title, anchor="w", justify="left", wraplength=560, font=self.title_font)
-        title.grid(row=0, column=2, sticky="ew", padx=8, pady=(10, 2))
+        title = ctk.CTkLabel(
+            frame,
+            text=self._two_line_title(video.title),
+            anchor="w",
+            justify="left",
+            wraplength=820,
+            font=self.title_font,
+        )
+        title.grid(row=0, column=2, sticky="ew", padx=8, pady=(5, 1))
         meta = self._video_meta(video)
         meta_label = ctk.CTkLabel(frame, text=meta, anchor="w", justify="left", font=self.font)
         meta_label.grid(
-            row=1, column=2, sticky="ew", padx=8, pady=(2, 10)
+            row=1, column=2, sticky="ew", padx=8, pady=(1, 5)
         )
 
-        status = ctk.CTkLabel(frame, text=self._status_text(video), width=130, anchor="e", font=self.font)
-        status.grid(row=0, column=3, rowspan=2, sticky="e", padx=12, pady=10)
+        status = ctk.CTkLabel(frame, text=self._status_text(video), width=96, anchor="e", font=self.font)
+        status.grid(row=0, column=3, rowspan=2, sticky="e", padx=(8, 10), pady=5)
         self.rows[video.youtube_video_id] = {
             "status": status,
             "checkbox": checkbox,
@@ -321,11 +486,21 @@ class VideoView(ctk.CTkFrame):
         }
         self._load_thumbnail_async(video)
 
+    def _two_line_title(self, title: str) -> str:
+        cleaned = " ".join(title.split())
+        max_chars = 78
+        if len(cleaned) <= max_chars:
+            return cleaned
+        return cleaned[: max_chars - 1].rstrip() + "…"
+
     def _load_visible_video_details(self, videos: list[Video]) -> None:
+        if self._is_popular_sort():
+            return
+        stale_ids = self.video_stats_repository.stale_video_ids(videos)
         for video in videos:
             if video.youtube_video_id in self.details_requested:
                 continue
-            if video.upload_date and video.view_count is not None:
+            if video.upload_date and video.view_count is not None and video.youtube_video_id not in stale_ids:
                 continue
             self.details_requested.add(video.youtube_video_id)
             future = self.detail_executor.submit(self.youtube_service.get_video_details, video)
@@ -346,6 +521,14 @@ class VideoView(ctk.CTkFrame):
         self.filtered_videos = [
             detailed if video.youtube_video_id == video_id else video for video in self.filtered_videos
         ]
+        self.video_stats_repository.save_view_count(video_id, detailed.view_count)
+        if self._is_popular_sort():
+            self.videos.sort(
+                key=self._view_count_sort_key,
+                reverse=True,
+            )
+            self.apply_filter()
+            return
         row = self.rows.get(video_id)
         if row:
             row["meta"].configure(text=self._video_meta(detailed))
@@ -381,24 +564,48 @@ class VideoView(ctk.CTkFrame):
         row["thumbnail_image"] = photo
         row["thumbnail"].configure(image=photo)
 
+    def _selection_changed(self, video_id: str, selected_var: ctk.BooleanVar) -> None:
+        if selected_var.get():
+            self.selected_video_ids.add(video_id)
+        else:
+            self.selected_video_ids.discard(video_id)
+        self._update_selected_count()
+
+    def _sync_selected_ids_with_available_videos(self) -> None:
+        downloadable_ids = {
+            video.youtube_video_id for video in self.videos if not video.is_downloaded
+        }
+        self.selected_video_ids.intersection_update(downloadable_ids)
+
+    def _update_selected_count(self) -> None:
+        if not hasattr(self, "selected_count_label"):
+            return
+        self.selected_count_label.configure(text=f"已選 {len(self.selected_video_ids)} 首")
+
     def select_all(self) -> None:
         for video in self.filtered_videos:
-            if not video.is_downloaded and video.youtube_video_id in self.selected:
-                self.selected[video.youtube_video_id].set(True)
+            if not video.is_downloaded:
+                self.selected_video_ids.add(video.youtube_video_id)
+                if video.youtube_video_id in self.selected:
+                    self.selected[video.youtube_video_id].set(True)
+        self._update_selected_count()
 
     def clear_selection(self) -> None:
+        self._clear_selection_state()
         for var in self.selected.values():
             var.set(False)
+
+    def _clear_selection_state(self) -> None:
+        self.selected_video_ids.clear()
+        self._update_selected_count()
 
     def download_selected(self) -> None:
         if self.selected_artist is None:
             self.set_status("請先選擇歌手。", error=True)
             return
-        selected_ids = {
-            video_id for video_id, var in self.selected.items() if var.get()
-        }
+        selected_ids = set(self.selected_video_ids)
         videos = [
-            video for video in self.filtered_videos
+            video for video in self.videos
             if video.youtube_video_id in selected_ids and not video.is_downloaded
         ]
         if not videos:
@@ -443,6 +650,10 @@ class VideoView(ctk.CTkFrame):
         self.set_status(f"批次完成：成功 {success}，失敗或略過 {failed}。")
         if self.selected_artist:
             self.videos = self.song_repository.mark_video_states(self.selected_artist.artist_id, self.videos)
+            self.selected_video_ids.difference_update(
+                video.youtube_video_id for video in self.videos if video.is_downloaded
+            )
+            self._update_selected_count()
             self.apply_filter()
         if self.on_downloads_changed:
             self.on_downloads_changed()
@@ -451,10 +662,7 @@ class VideoView(ctk.CTkFrame):
         duration = self._format_duration(video.duration)
         upload_date = self._format_upload_date(video.upload_date)
         view_count = self._format_view_count(video.view_count)
-        return (
-            f"ID: {video.youtube_video_id} | 長度: {duration} | 上傳: {upload_date} | 觀看: {view_count}\n"
-            f"{video.youtube_url}"
-        )
+        return f"長度: {duration} | 上傳: {upload_date} | 觀看: {view_count}"
 
     def _status_text(self, video: Video) -> str:
         if video.file_missing:
@@ -482,7 +690,14 @@ class VideoView(ctk.CTkFrame):
     def _format_view_count(self, view_count: int | None) -> str:
         if view_count is None:
             return "未知"
+        if view_count == -1:
+            return "不可抓"
         return f"{view_count:,}"
+
+    def _view_count_sort_key(self, video: Video) -> int:
+        if video.view_count is None or video.view_count < 0:
+            return -1
+        return video.view_count
 
     def _artist_label(self, artist: Artist) -> str:
         return f"{artist.artist_id} - {artist.channel_name}"
@@ -505,6 +720,10 @@ class VideoView(ctk.CTkFrame):
     def set_status(self, text: str, *, error: bool = False) -> None:
         color = "#b3261e" if error else "#1b6e3c"
         self.status_label.configure(text=text, text_color=color)
+
+    def _set_status_for_token(self, load_token: int, text: str, *, error: bool = False) -> None:
+        if load_token == self.video_load_token:
+            self.set_status(text, error=error)
 
     def destroy(self) -> None:
         self.is_destroyed = True

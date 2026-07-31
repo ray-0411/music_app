@@ -476,6 +476,13 @@ class PlayerView(ctk.CTkFrame):
         else:
             self.set_status(f"已載入 {len(self.playback_service.songs)} 首歌曲。")
 
+    def refresh_display(self) -> None:
+        self.artist_names = {
+            artist.artist_id.lower(): artist.channel_name
+            for artist in self.artist_repository.list_artists()
+        }
+        self._refresh_song_labels()
+
     def toggle_play_pause(self) -> None:
         try:
             is_playing = self.playback_service.toggle_play_pause()

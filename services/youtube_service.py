@@ -4,6 +4,7 @@ import yt_dlp
 
 from config import VIDEO_BATCH_SIZE
 from models.video import Video
+from services.yt_dlp_options import with_common_ytdlp_options
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,7 @@ class YouTubeService:
             "playlistend": 1,
         }
         try:
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with yt_dlp.YoutubeDL(with_common_ytdlp_options(options)) as ydl:
                 info = ydl.extract_info(url, download=False)
         except Exception as exc:
             raise RuntimeError(f"無法取得頻道資料：{exc}") from exc
@@ -55,7 +56,10 @@ class YouTubeService:
         return ChannelInfo(url, channel_id, channel_name, channel_url, avatar_url, None)
 
     def list_channel_videos(
-        self, channel_url: str, start: int = 0, limit: int = VIDEO_BATCH_SIZE
+        self,
+        channel_url: str,
+        start: int = 0,
+        limit: int | None = VIDEO_BATCH_SIZE,
     ) -> VideoListResult:
         videos_url = self._videos_url(channel_url)
         options = {
@@ -63,19 +67,20 @@ class YouTubeService:
             "skip_download": True,
             "extract_flat": "in_playlist",
             "playliststart": start + 1,
-            "playlistend": start + limit,
             "ignoreerrors": True,
         }
+        if limit is not None:
+            options["playlistend"] = start + limit
         try:
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with yt_dlp.YoutubeDL(with_common_ytdlp_options(options)) as ydl:
                 info = ydl.extract_info(videos_url, download=False)
         except Exception as exc:
             raise RuntimeError(f"無法取得影片列表：{exc}") from exc
 
         entries = [entry for entry in info.get("entries", []) if entry]
         total_count = info.get("playlist_count")
-        limited = total_count is not None and total_count > start + len(entries)
-        if total_count is None and len(entries) == limit:
+        limited = limit is not None and total_count is not None and total_count > start + len(entries)
+        if limit is not None and total_count is None and len(entries) == limit:
             limited = True
         videos = [self._entry_to_video(entry) for entry in entries[:limit]]
         return VideoListResult(videos=videos, limited=limited, total_count=total_count)
@@ -89,7 +94,7 @@ class YouTubeService:
             "ignoreerrors": True,
         }
         try:
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with yt_dlp.YoutubeDL(with_common_ytdlp_options(options)) as ydl:
                 info = ydl.extract_info(videos_url, download=False)
         except Exception:
             return None
@@ -124,9 +129,22 @@ class YouTubeService:
             "noplaylist": True,
         }
         try:
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with yt_dlp.YoutubeDL(with_common_ytdlp_options(options)) as ydl:
                 info = ydl.extract_info(video.youtube_url, download=False)
-        except Exception:
+        except Exception as exc:
+            if "members-only" in str(exc).lower() or "join this channel" in str(exc).lower():
+                return Video(
+                    youtube_video_id=video.youtube_video_id,
+                    youtube_url=video.youtube_url,
+                    title=video.title,
+                    thumbnail_url=video.thumbnail_url,
+                    duration=video.duration,
+                    upload_date=video.upload_date,
+                    view_count=-1,
+                    download_status=video.download_status,
+                    is_downloaded=video.is_downloaded,
+                    file_missing=video.file_missing,
+                )
             return video
         return Video(
             youtube_video_id=video.youtube_video_id,
@@ -148,7 +166,7 @@ class YouTubeService:
             "noplaylist": True,
         }
         try:
-            with yt_dlp.YoutubeDL(options) as ydl:
+            with yt_dlp.YoutubeDL(with_common_ytdlp_options(options)) as ydl:
                 info = ydl.extract_info(url, download=False)
         except Exception as exc:
             raise RuntimeError(f"無法取得單曲資料：{exc}") from exc
@@ -176,6 +194,8 @@ class YouTubeService:
 
     def _videos_url(self, channel_url: str) -> str:
         clean = channel_url.rstrip("/")
+        if "?" in clean:
+            clean = clean.split("?", 1)[0].rstrip("/")
         if clean.endswith("/videos"):
             return clean
         return f"{clean}/videos"

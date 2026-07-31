@@ -10,6 +10,9 @@ data/settings.json
 downloads/
 assets/
 cache/
+private/
+*.cookies.txt
+youtube_cookies.txt
 
 *.log
 .DS_Store

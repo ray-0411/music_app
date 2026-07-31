@@ -182,9 +182,23 @@ def initialize_database() -> None:
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_artist_ratings_artist_id ON artist_ratings(artist_id)"
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS video_stats (
+                youtube_video_id TEXT PRIMARY KEY,
+                view_count INTEGER NOT NULL,
+                last_failed_at TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_video_stats_updated_at ON video_stats(updated_at)"
+        )
         _ensure_column(connection, "artists", "avatar_url", "TEXT")
         _ensure_column(connection, "songs", "duration", "INTEGER")
         _ensure_column(connection, "songs", "upload_date", "TEXT")
+        _ensure_column(connection, "video_stats", "last_failed_at", "TEXT")
         _seed_default_tag_categories(connection)
         _seed_default_song_tag_categories(connection)
         connection.execute(
