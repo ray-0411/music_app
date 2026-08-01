@@ -25,7 +25,10 @@ class VideoStatsRepository:
                     batch,
                 ).fetchall()
                 cached.update({row["youtube_video_id"]: row["view_count"] for row in rows})
-        return [self._with_view_count(video, cached.get(video.youtube_video_id)) for video in videos]
+        return [
+            video if video.view_count is not None else self._with_view_count(video, cached.get(video.youtube_video_id))
+            for video in videos
+        ]
 
     def stale_video_ids(self, videos: list[Video], *, max_age_days: int = 7) -> set[str]:
         if not videos:
@@ -75,7 +78,8 @@ class VideoStatsRepository:
                 VALUES (?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(youtube_video_id) DO UPDATE SET
                     view_count = excluded.view_count,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = CURRENT_TIMESTAMP,
+                    last_failed_at = NULL
                 """,
                 (youtube_video_id, view_count),
             )
@@ -95,7 +99,8 @@ class VideoStatsRepository:
                 VALUES (?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(youtube_video_id) DO UPDATE SET
                     view_count = excluded.view_count,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = CURRENT_TIMESTAMP,
+                    last_failed_at = NULL
                 """,
                 rows,
             )

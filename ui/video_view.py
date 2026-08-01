@@ -189,6 +189,7 @@ class VideoView(ctk.CTkFrame):
         result = self.youtube_service.list_channel_videos(
             artist.youtube_url, start=start, limit=limit
         )
+        self.video_stats_repository.save_view_counts(result.videos)
         videos = self.video_stats_repository.apply_cached_view_counts(result.videos)
         videos = self.song_repository.mark_video_states(artist.artist_id, videos)
         return result, videos

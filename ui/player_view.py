@@ -182,17 +182,8 @@ class PlayerView(ctk.CTkFrame):
         ctk.CTkLabel(self.rating_frame, text="歌曲評分", anchor="w", font=self.section_font).grid(
             row=1, column=0, sticky="ew", padx=14, pady=(4, 6)
         )
-        self.rating_song_label = ctk.CTkLabel(
-            self.rating_frame,
-            text="目前沒有歌曲",
-            anchor="w",
-            justify="left",
-            wraplength=220,
-            font=self.font,
-        )
-        self.rating_song_label.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 8))
         self.rating_value_label = ctk.CTkLabel(self.rating_frame, text="5 / 10", font=self.section_font)
-        self.rating_value_label.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 4))
+        self.rating_value_label.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 4))
         ctk.CTkSlider(
             self.rating_frame,
             from_=0,
@@ -200,13 +191,13 @@ class PlayerView(ctk.CTkFrame):
             number_of_steps=10,
             variable=self.rating_score_var,
             command=lambda value: self._update_rating_label(value),
-        ).grid(row=4, column=0, sticky="ew", padx=14, pady=4)
+        ).grid(row=3, column=0, sticky="ew", padx=14, pady=4)
         ctk.CTkOptionMenu(
             self.rating_frame,
             values=["影響演算法", "單純評分"],
             variable=self.rating_type_var,
             font=self.font,
-        ).grid(row=5, column=0, sticky="ew", padx=14, pady=6)
+        ).grid(row=4, column=0, sticky="ew", padx=14, pady=6)
         self.submit_rating_button = ctk.CTkButton(
             self.rating_frame,
             text="送出評分",
@@ -214,7 +205,7 @@ class PlayerView(ctk.CTkFrame):
             font=self.button_font,
             state="disabled",
         )
-        self.submit_rating_button.grid(row=6, column=0, sticky="ew", padx=14, pady=(6, 8))
+        self.submit_rating_button.grid(row=5, column=0, sticky="ew", padx=14, pady=(6, 8))
         self.rating_status_label = ctk.CTkLabel(
             self.rating_frame,
             text="",
@@ -223,10 +214,10 @@ class PlayerView(ctk.CTkFrame):
             wraplength=220,
             font=self.font,
         )
-        self.rating_status_label.grid(row=7, column=0, sticky="ew", padx=14, pady=(0, 12))
+        self.rating_status_label.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 12))
 
         ctk.CTkLabel(self.rating_frame, text="歌手評分", anchor="w", font=self.section_font).grid(
-            row=8, column=0, sticky="ew", padx=14, pady=(8, 6)
+            row=7, column=0, sticky="ew", padx=14, pady=(8, 6)
         )
         self.artist_rating_song_label = ctk.CTkLabel(
             self.rating_frame,
@@ -236,9 +227,9 @@ class PlayerView(ctk.CTkFrame):
             wraplength=220,
             font=self.font,
         )
-        self.artist_rating_song_label.grid(row=9, column=0, sticky="ew", padx=14, pady=(0, 8))
+        self.artist_rating_song_label.grid(row=8, column=0, sticky="ew", padx=14, pady=(0, 8))
         self.artist_rating_value_label = ctk.CTkLabel(self.rating_frame, text="5 / 10", font=self.section_font)
-        self.artist_rating_value_label.grid(row=10, column=0, sticky="ew", padx=14, pady=(0, 4))
+        self.artist_rating_value_label.grid(row=9, column=0, sticky="ew", padx=14, pady=(0, 4))
         ctk.CTkSlider(
             self.rating_frame,
             from_=0,
@@ -246,13 +237,13 @@ class PlayerView(ctk.CTkFrame):
             number_of_steps=10,
             variable=self.artist_rating_score_var,
             command=lambda value: self._update_artist_rating_label(value),
-        ).grid(row=11, column=0, sticky="ew", padx=14, pady=4)
+        ).grid(row=10, column=0, sticky="ew", padx=14, pady=4)
         ctk.CTkOptionMenu(
             self.rating_frame,
             values=["影響演算法", "單純評分"],
             variable=self.artist_rating_type_var,
             font=self.font,
-        ).grid(row=12, column=0, sticky="ew", padx=14, pady=6)
+        ).grid(row=11, column=0, sticky="ew", padx=14, pady=6)
         self.submit_artist_rating_button = ctk.CTkButton(
             self.rating_frame,
             text="送出歌手評分",
@@ -260,7 +251,7 @@ class PlayerView(ctk.CTkFrame):
             font=self.button_font,
             state="disabled",
         )
-        self.submit_artist_rating_button.grid(row=13, column=0, sticky="ew", padx=14, pady=(6, 8))
+        self.submit_artist_rating_button.grid(row=12, column=0, sticky="ew", padx=14, pady=(6, 8))
         self.artist_rating_status_label = ctk.CTkLabel(
             self.rating_frame,
             text="",
@@ -269,7 +260,7 @@ class PlayerView(ctk.CTkFrame):
             wraplength=220,
             font=self.font,
         )
-        self.artist_rating_status_label.grid(row=14, column=0, sticky="ew", padx=14, pady=(0, 12))
+        self.artist_rating_status_label.grid(row=13, column=0, sticky="ew", padx=14, pady=(0, 12))
 
         self.status_label = ctk.CTkLabel(self.center_frame, text="", anchor="w", font=self.font)
         self.status_label.grid(row=7, column=0, sticky="ew", padx=18, pady=(0, 12))
@@ -587,7 +578,6 @@ class PlayerView(ctk.CTkFrame):
             self.song_rating_submitted_for_current_play = False
             self.artist_rating_submitted_for_current_play = False
             self._reset_rating_controls()
-            self.rating_song_label.configure(text="目前沒有歌曲")
             self.rating_status_label.configure(text="")
             self.submit_rating_button.configure(state="disabled")
             self.artist_rating_song_label.configure(text="目前沒有歌手")
@@ -599,7 +589,6 @@ class PlayerView(ctk.CTkFrame):
             self.song_rating_submitted_for_current_play = False
             self.artist_rating_submitted_for_current_play = False
             self._reset_rating_controls()
-        self.rating_song_label.configure(text=self._display_song_name(song))
         self.rating_status_label.configure(text=self._song_rating_status_text(song))
         self.submit_rating_button.configure(state=self._song_rating_button_state(song))
         self.artist_rating_song_label.configure(text=f"{self._artist_name(song)}\n{song.artist_id}")
