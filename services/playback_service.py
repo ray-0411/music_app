@@ -1,5 +1,6 @@
 from pathlib import Path
 import random
+from dataclasses import replace
 
 from database.rating_repository import RatingRepository
 from models.song import Song
@@ -95,7 +96,7 @@ class PlaybackService:
             raise ValueError("沒有可播放的歌曲。")
         media = self.instance.media_new_path(str(Path(song.file_path)))
         self.player.set_media(media)
-        self.player.audio_set_volume(self.volume)
+        self._apply_effective_volume(song)
         self.player.play()
         self._remember_current_song()
 
@@ -106,7 +107,7 @@ class PlaybackService:
             raise ValueError("沒有可播放的歌曲。")
         media = self.instance.media_new_path(str(Path(song.file_path)))
         self.player.set_media(media)
-        self.player.audio_set_volume(self.volume)
+        self._apply_effective_volume(song)
         self.player.stop()
         self._remember_current_song()
 
@@ -151,6 +152,22 @@ class PlaybackService:
             self.play_current()
         else:
             self.load_current_paused()
+        return True
+
+    def set_forced_next_song(self, song_id: int) -> bool:
+        if not self.songs:
+            return False
+        current_song = self.current_song()
+        if current_song is not None and current_song.id == song_id:
+            return False
+        matched_index = next(
+            (index for index, song in enumerate(self.songs) if song.id == song_id),
+            None,
+        )
+        if matched_index is None:
+            return False
+        self.forced_next_index = matched_index
+        self.preview_next_index = None
         return True
 
     def restart_with_current_settings(self, *, autoplay: bool = False) -> bool:
@@ -209,11 +226,24 @@ class PlaybackService:
     def set_volume(self, volume: int) -> None:
         self._require_player()
         self.volume = max(0, min(int(volume), 100))
-        self.player.audio_set_volume(self.volume)
+        self._apply_effective_volume(self.current_song())
         self.settings_service.set_volume(self.volume)
 
     def get_volume(self) -> int:
         return self.volume
+
+    def set_current_song_volume_percent(self, song_volume_percent: int) -> None:
+        song = self.current_song()
+        if song is None:
+            return
+        volume = max(0, min(int(song_volume_percent), 200))
+        updated_song = replace(song, song_volume_percent=volume)
+        self.songs[self.current_index] = updated_song
+        self._apply_effective_volume(updated_song)
+
+    def current_song_volume_percent(self) -> int:
+        song = self.current_song()
+        return song.song_volume_percent if song else 100
 
     def get_play_order(self) -> str:
         return self.settings_service.get_play_order()
@@ -334,6 +364,13 @@ class PlaybackService:
             self.play_history_ids = self.play_history_ids[-max_history:]
         if len(self.play_history_indices) > max_history:
             self.play_history_indices = self.play_history_indices[-max_history:]
+
+    def _apply_effective_volume(self, song: Song | None) -> None:
+        if self.player is None:
+            return
+        song_volume_percent = song.song_volume_percent if song else 100
+        effective_volume = round(self.volume * song_volume_percent / 100)
+        self.player.audio_set_volume(max(0, min(effective_volume, 200)))
 
     def _require_player(self) -> None:
         if not self.available or self.instance is None or self.player is None:

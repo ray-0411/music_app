@@ -108,6 +108,7 @@ class App(ctk.CTk):
             thumbnail_service=self.thumbnail_service,
             tag_repository=self.song_tag_repository,
             rating_repository=self.rating_repository,
+            playback_service=self.playback_service,
         )
         self.song_management_view.grid(row=0, column=0, sticky="nsew")
 
@@ -119,6 +120,8 @@ class App(ctk.CTk):
             tag_repository=self.tag_repository,
             rating_repository=self.rating_repository,
             on_artists_changed=self._artists_changed,
+            on_artist_id_change_start=self._artist_id_change_start,
+            on_artist_id_change_finished=self._artist_id_change_finished,
         )
         self.artist_view.grid(row=0, column=0, sticky="nsew")
 
@@ -131,6 +134,9 @@ class App(ctk.CTk):
             thumbnail_service=self.thumbnail_service,
         )
         self.player_view.grid(row=0, column=0, sticky="nsew")
+        self.song_management_view.on_queue_changed = self.player_view.refresh_display
+        self.player_view.on_playback_changed = self.song_management_view.refresh_queue_buttons
+        self.song_management_view.refresh_queue_buttons()
         self.download_single_placeholder = self._build_placeholder(
             "單曲下載",
             "單曲下載功能預留中。現在請先使用「頻道下載」。",
@@ -209,6 +215,12 @@ class App(ctk.CTk):
     def _downloads_changed(self) -> None:
         self.song_management_view.reload_songs()
         self.player_view.reload_playlist()
+
+    def _artist_id_change_start(self) -> None:
+        self.playback_service.stop()
+
+    def _artist_id_change_finished(self, old_artist_id: str, new_artist_id: str) -> None:
+        self._close_app()
 
     def _build_sidebar(self) -> None:
         for section_key, section in self.sections.items():

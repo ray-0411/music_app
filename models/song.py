@@ -15,5 +15,5 @@ class Song:
     duration: int | None
     upload_date: str | None
     download_status: str
+    song_volume_percent: int = 100
     downloaded_at: str | None = None
-

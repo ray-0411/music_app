@@ -5,6 +5,13 @@ from models.song import Song
 from models.video import Video
 
 
+SONG_SELECT_COLUMNS = """
+id, artist_id, youtube_video_id, youtube_url, original_title,
+song_name, file_name, file_path, thumbnail_url, duration,
+upload_date, song_volume_percent, download_status, downloaded_at
+"""
+
+
 def _row_to_song(row) -> Song:
     return Song(
         id=row["id"],
@@ -19,6 +26,7 @@ def _row_to_song(row) -> Song:
         duration=row["duration"],
         upload_date=row["upload_date"],
         download_status=row["download_status"],
+        song_volume_percent=row["song_volume_percent"],
         downloaded_at=row["downloaded_at"],
     )
 
@@ -27,10 +35,9 @@ class SongRepository:
     def list_songs(self) -> list[Song]:
         with get_connection() as connection:
             rows = connection.execute(
-                """
-                SELECT id, artist_id, youtube_video_id, youtube_url, original_title,
-                       song_name, file_name, file_path, thumbnail_url, duration,
-                       upload_date, download_status, downloaded_at
+                f"""
+                SELECT
+                       {SONG_SELECT_COLUMNS}
                 FROM songs
                 ORDER BY downloaded_at DESC, id DESC
                 """
@@ -40,10 +47,9 @@ class SongRepository:
     def get_by_id(self, song_id: int) -> Song | None:
         with get_connection() as connection:
             row = connection.execute(
-                """
-                SELECT id, artist_id, youtube_video_id, youtube_url, original_title,
-                       song_name, file_name, file_path, thumbnail_url, duration,
-                       upload_date, download_status, downloaded_at
+                f"""
+                SELECT
+                       {SONG_SELECT_COLUMNS}
                 FROM songs
                 WHERE id = ?
                 """,
@@ -54,10 +60,9 @@ class SongRepository:
     def get_by_video_id(self, youtube_video_id: str) -> Song | None:
         with get_connection() as connection:
             row = connection.execute(
-                """
-                SELECT id, artist_id, youtube_video_id, youtube_url, original_title,
-                       song_name, file_name, file_path, thumbnail_url, duration,
-                       upload_date, download_status, downloaded_at
+                f"""
+                SELECT
+                       {SONG_SELECT_COLUMNS}
                 FROM songs
                 WHERE youtube_video_id = ?
                 """,
@@ -68,10 +73,9 @@ class SongRepository:
     def downloaded_video_ids_for_artist(self, artist_id: str) -> dict[str, Song]:
         with get_connection() as connection:
             rows = connection.execute(
-                """
-                SELECT id, artist_id, youtube_video_id, youtube_url, original_title,
-                       song_name, file_name, file_path, thumbnail_url, duration,
-                       upload_date, download_status, downloaded_at
+                f"""
+                SELECT
+                       {SONG_SELECT_COLUMNS}
                 FROM songs
                 WHERE artist_id = ? COLLATE NOCASE
                 """,
@@ -124,10 +128,9 @@ class SongRepository:
                 ),
             )
             row = connection.execute(
-                """
-                SELECT id, artist_id, youtube_video_id, youtube_url, original_title,
-                       song_name, file_name, file_path, thumbnail_url, duration,
-                       upload_date, download_status, downloaded_at
+                f"""
+                SELECT
+                       {SONG_SELECT_COLUMNS}
                 FROM songs
                 WHERE youtube_video_id = ?
                 """,
@@ -196,10 +199,33 @@ class SongRepository:
                 (song_name, file_name, str(file_path), song_id),
             )
             row = connection.execute(
+                f"""
+                SELECT
+                       {SONG_SELECT_COLUMNS}
+                FROM songs
+                WHERE id = ?
+                """,
+                (song_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("找不到歌曲。")
+        return _row_to_song(row)
+
+    def update_song_volume(self, song_id: int, song_volume_percent: int) -> Song:
+        volume = max(0, min(int(song_volume_percent), 200))
+        with get_connection() as connection:
+            connection.execute(
                 """
-                SELECT id, artist_id, youtube_video_id, youtube_url, original_title,
-                       song_name, file_name, file_path, thumbnail_url, duration,
-                       upload_date, download_status, downloaded_at
+                UPDATE songs
+                SET song_volume_percent = ?
+                WHERE id = ?
+                """,
+                (volume, song_id),
+            )
+            row = connection.execute(
+                f"""
+                SELECT
+                       {SONG_SELECT_COLUMNS}
                 FROM songs
                 WHERE id = ?
                 """,

@@ -60,6 +60,7 @@ class VideoView(ctk.CTkFrame):
         self.rows: dict[str, dict] = {}
         self.details_requested: set[str] = set()
         self.sort_mode = ctk.StringVar(value="最新")
+        self.hide_downloaded_var = ctk.BooleanVar(value=False)
         self.default_thumbnail = self._make_default_thumbnail()
         self.is_destroyed = False
         self.font = base_font()
@@ -112,6 +113,14 @@ class VideoView(ctk.CTkFrame):
         self.selected_count_label.pack(side="left", padx=12, pady=10)
         self.download_button = ctk.CTkButton(actions, text="批次下載", width=120, command=self.download_selected, font=self.button_font)
         self.download_button.pack(side="right", padx=(6, 12), pady=10)
+        self.hide_downloaded_checkbox = ctk.CTkCheckBox(
+            actions,
+            text="隱藏已下載",
+            variable=self.hide_downloaded_var,
+            command=self.apply_filter,
+            font=self.font,
+        )
+        self.hide_downloaded_checkbox.pack(side="right", padx=6, pady=10)
         self.video_list = ctk.CTkScrollableFrame(self)
         self.video_list.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.video_list.grid_columnconfigure(0, weight=1)
@@ -320,10 +329,12 @@ class VideoView(ctk.CTkFrame):
 
     def apply_filter(self) -> None:
         query = self.search_entry.get().strip().lower()
-        if query:
-            self.filtered_videos = [video for video in self.videos if query in video.title.lower()]
-        else:
-            self.filtered_videos = list(self.videos)
+        self.filtered_videos = [
+            video
+            for video in self.videos
+            if (not query or query in video.title.lower())
+            and (not self.hide_downloaded_var.get() or not video.is_downloaded)
+        ]
         self.current_page = min(self.current_page, max(self.page_count() - 1, 0))
         self.render_videos()
 

@@ -41,6 +41,7 @@ def initialize_database() -> None:
                 thumbnail_url TEXT,
                 duration INTEGER,
                 upload_date TEXT,
+                song_volume_percent INTEGER NOT NULL DEFAULT 100,
                 download_status TEXT NOT NULL,
                 downloaded_at TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -198,6 +199,7 @@ def initialize_database() -> None:
         _ensure_column(connection, "artists", "avatar_url", "TEXT")
         _ensure_column(connection, "songs", "duration", "INTEGER")
         _ensure_column(connection, "songs", "upload_date", "TEXT")
+        _ensure_column(connection, "songs", "song_volume_percent", "INTEGER NOT NULL DEFAULT 100")
         _ensure_column(connection, "video_stats", "last_failed_at", "TEXT")
         _seed_default_tag_categories(connection)
         _seed_default_song_tag_categories(connection)

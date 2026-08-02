@@ -10,6 +10,7 @@ from database.rating_repository import RatingRepository
 from database.song_repository import SongRepository
 from database.tag_repository import TagRepository
 from models.song import Song
+from services.playback_service import PlaybackService
 from services.song_service import SongService
 from services.thumbnail_service import ThumbnailService
 from ui.fonts import base_font, button_font
@@ -29,6 +30,8 @@ class SongManagementView(ctk.CTkFrame):
         thumbnail_service: ThumbnailService,
         tag_repository: TagRepository,
         rating_repository: RatingRepository,
+        playback_service: PlaybackService | None = None,
+        on_queue_changed=None,
     ) -> None:
         super().__init__(master, fg_color="transparent")
         self.artist_repository = artist_repository
@@ -37,10 +40,13 @@ class SongManagementView(ctk.CTkFrame):
         self.thumbnail_service = thumbnail_service
         self.tag_repository = tag_repository
         self.rating_repository = rating_repository
+        self.playback_service = playback_service
+        self.on_queue_changed = on_queue_changed
         self.tag_vars: dict[int, ctk.BooleanVar] = {}
         self.thumbnail_labels: dict[str, ctk.CTkLabel] = {}
         self.thumbnail_images: dict[str, ctk.CTkImage] = {}
         self.thumbnail_requests: set[str] = set()
+        self.next_song_buttons: dict[int, ctk.CTkButton] = {}
         self.thumbnail_executor = ThreadPoolExecutor(max_workers=4)
         self.default_thumbnail = self._make_default_thumbnail()
         self.is_destroyed = False
@@ -49,12 +55,15 @@ class SongManagementView(ctk.CTkFrame):
         self.all_songs: list[Song] = []
         self.artist_names: dict[str, str] = {}
         self.current_page = 0
-        self.search_tag_vars: dict[int, ctk.BooleanVar] = {}
+        self.search_tag_buttons: dict[int, ctk.CTkButton] = {}
+        self.search_tag_states: dict[int, int] = {}
         self.search_keyword = ""
         self.selected_search_tag_ids: set[int] = set()
+        self.excluded_search_tag_ids: set[int] = set()
         self.selected_search_artist_id = ""
         self.song_rating_score_var = ctk.IntVar(value=5)
         self.song_rating_type_var = ctk.StringVar(value="影響演算法")
+        self.search_tag_column_count = 8
         self.font = base_font()
         self.button_font = button_font()
 
@@ -129,6 +138,7 @@ class SongManagementView(ctk.CTkFrame):
         for child in self.song_list.winfo_children():
             child.destroy()
         self.thumbnail_labels.clear()
+        self.next_song_buttons.clear()
         if not self.songs:
             ctk.CTkLabel(self.song_list, text="尚無已下載歌曲", anchor="w", font=self.font).grid(
                 row=0, column=0, sticky="ew", padx=8, pady=8
@@ -210,13 +220,29 @@ class SongManagementView(ctk.CTkFrame):
         ctk.CTkLabel(frame, text=self._display_song_name(song), anchor="w", font=self.font).grid(
             row=0, column=2, sticky="nsew", padx=6, pady=(7, 3)
         )
+        button_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        button_frame.grid(row=0, column=3, rowspan=2, sticky="nsew", padx=(6, 10), pady=7)
+        button_frame.grid_columnconfigure((0, 1), weight=1)
+        button_frame.grid_rowconfigure(0, weight=1)
+        next_state = "normal" if self._can_set_next(song) else "disabled"
+        next_button = ctk.CTkButton(
+            button_frame,
+            text="指定下一首",
+            width=116,
+            command=lambda selected_song=song: self.set_song_as_next(selected_song),
+            font=self.button_font,
+            state=next_state,
+        )
+        next_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        if song.id is not None:
+            self.next_song_buttons[song.id] = next_button
         ctk.CTkButton(
-            frame,
+            button_frame,
             text="編輯",
             width=72,
             command=lambda selected_song=song: self.show_edit_page(selected_song),
             font=self.button_font,
-        ).grid(row=0, column=3, rowspan=2, padx=(6, 10), pady=7)
+        ).grid(row=0, column=1, sticky="ew", padx=(4, 0))
         ctk.CTkLabel(frame, text=f"長度：{self._display_duration(song.duration)}", anchor="w", font=self.font).grid(
             row=1, column=2, sticky="nsew", padx=6, pady=(0, 7)
         )
@@ -224,7 +250,13 @@ class SongManagementView(ctk.CTkFrame):
     def render_search_page(self) -> None:
         for child in self.search_page.winfo_children():
             child.destroy()
-        self.search_tag_vars.clear()
+        self.search_tag_buttons.clear()
+        self.search_tag_states = {
+            option_id: 1 for option_id in self.selected_search_tag_ids
+        }
+        self.search_tag_states.update(
+            {option_id: -1 for option_id in self.excluded_search_tag_ids}
+        )
         ctk.CTkLabel(self.search_page, text="搜尋歌曲", anchor="w", font=self.font).grid(
             row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(12, 8)
         )
@@ -249,15 +281,15 @@ class SongManagementView(ctk.CTkFrame):
         self.search_artist_menu.grid(row=2, column=1, sticky="ew", padx=12, pady=8)
 
         ctk.CTkLabel(self.search_page, text="標籤", anchor="w", font=self.font).grid(
-            row=3, column=0, sticky="nw", padx=12, pady=(14, 8)
+            row=3, column=0, columnspan=2, sticky="ew", padx=12, pady=(14, 4)
         )
         tag_frame = ctk.CTkFrame(self.search_page, fg_color="transparent")
-        tag_frame.grid(row=3, column=1, sticky="ew", padx=12, pady=(10, 8))
+        tag_frame.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 8))
         tag_frame.grid_columnconfigure(1, weight=1)
         self._render_search_tag_options(tag_frame)
 
         buttons = ctk.CTkFrame(self.search_page, fg_color="transparent")
-        buttons.grid(row=4, column=1, sticky="w", padx=12, pady=(14, 16))
+        buttons.grid(row=5, column=0, columnspan=2, sticky="w", padx=12, pady=(14, 16))
         ctk.CTkButton(buttons, text="搜尋", command=self.apply_search, font=self.button_font).pack(
             side="left", padx=(0, 8)
         )
@@ -288,23 +320,32 @@ class SongManagementView(ctk.CTkFrame):
                     row=0, column=0, sticky="w", padx=4, pady=2
                 )
             for index, option in enumerate(options):
-                var = ctk.BooleanVar(value=option.id in self.selected_search_tag_ids)
-                self.search_tag_vars[option.id] = var
-                ctk.CTkCheckBox(
+                state = self.search_tag_states.get(option.id, 0)
+                button = ctk.CTkButton(
                     options_frame,
-                    text=option.name,
-                    variable=var,
-                    onvalue=True,
-                    offvalue=False,
+                    text=self._search_tag_button_text(option.name, state),
+                    width=1,
+                    fg_color=self._search_tag_button_color(state),
+                    hover_color=self._search_tag_button_color(state),
+                    text_color="black",
+                    command=lambda option_id=option.id, name=option.name: self._cycle_search_tag_state(
+                        option_id, name
+                    ),
                     font=self.font,
-                ).grid(row=index // 3, column=index % 3, sticky="w", padx=4, pady=2)
+                )
+                columns = max(self.search_tag_column_count, 1)
+                button.grid(row=index // columns, column=index % columns, sticky="w", padx=8, pady=6)
+                self.search_tag_buttons[option.id] = button
             row += 1
 
     def apply_search(self) -> None:
         self.search_keyword = self.search_entry.get().strip()
         self.selected_search_artist_id = self.search_artist_labels.get(self.search_artist_menu.get(), "")
         self.selected_search_tag_ids = {
-            option_id for option_id, var in self.search_tag_vars.items() if var.get()
+            option_id for option_id, state in self.search_tag_states.items() if state == 1
+        }
+        self.excluded_search_tag_ids = {
+            option_id for option_id, state in self.search_tag_states.items() if state == -1
         }
         self.current_page = 0
         self.songs = self._filter_songs(self.all_songs)
@@ -315,16 +356,45 @@ class SongManagementView(ctk.CTkFrame):
         self.search_keyword = ""
         self.selected_search_artist_id = ""
         self.selected_search_tag_ids.clear()
+        self.excluded_search_tag_ids.clear()
+        self.search_tag_states.clear()
         self.current_page = 0
         self.songs = list(self.all_songs)
         self.show_list_page(reload=False)
         self.set_status(f"共 {len(self.songs)} 首下載紀錄。")
 
+    def set_song_as_next(self, song: Song) -> None:
+        if song.id is None or self.playback_service is None:
+            self.set_status("目前沒有可指定的播放清單。", error=True)
+            return
+        current_song = self.playback_service.current_song()
+        if current_song is not None and current_song.id == song.id:
+            self.set_status("這首歌正在播放，不能指定為下一首。", error=True)
+            self.render_song_page()
+            return
+        if not self.playback_service.set_forced_next_song(song.id):
+            self.set_status("這首歌不在目前可播放清單中。", error=True)
+            self.render_song_page()
+            return
+        if self.on_queue_changed:
+            self.on_queue_changed()
+        self.set_status(f"已指定下一首：{self._display_song_name(song)}")
+        self.refresh_queue_buttons()
+
+    def refresh_queue_buttons(self) -> None:
+        for song_id, button in self.next_song_buttons.items():
+            state = "normal"
+            current_song = self.playback_service.current_song() if self.playback_service else None
+            if current_song is not None and current_song.id == song_id:
+                state = "disabled"
+            button.configure(state=state)
+
     def _filter_songs(self, songs: list[Song]) -> list[Song]:
         keyword = self.search_keyword.strip().lower()
         artist_id = self.selected_search_artist_id.strip().lower()
         selected_tags = set(self.selected_search_tag_ids)
-        if not keyword and not artist_id and not selected_tags:
+        excluded_tags = set(self.excluded_search_tag_ids)
+        if not keyword and not artist_id and not selected_tags and not excluded_tags:
             return list(songs)
         filtered: list[Song] = []
         for song in songs:
@@ -333,6 +403,8 @@ class SongManagementView(ctk.CTkFrame):
             if keyword and not self._song_matches_keyword(song, keyword):
                 continue
             if selected_tags and not self._song_matches_tags(song, selected_tags):
+                continue
+            if excluded_tags and self._song_matches_any_tag(song, excluded_tags):
                 continue
             filtered.append(song)
         return filtered
@@ -352,6 +424,43 @@ class SongManagementView(ctk.CTkFrame):
         if song.id is None:
             return False
         return selected_tags.issubset(self.tag_repository.get_song_option_ids(song.id))
+
+    def _song_matches_any_tag(self, song: Song, tags: set[int]) -> bool:
+        if song.id is None:
+            return False
+        return bool(tags.intersection(self.tag_repository.get_song_option_ids(song.id)))
+
+    def _cycle_search_tag_state(self, option_id: int, name: str) -> None:
+        current = self.search_tag_states.get(option_id, 0)
+        next_state = 1 if current == 0 else -1 if current == 1 else 0
+        if next_state == 0:
+            self.search_tag_states.pop(option_id, None)
+        else:
+            self.search_tag_states[option_id] = next_state
+        button = self.search_tag_buttons.get(option_id)
+        if button is not None:
+            color = self._search_tag_button_color(next_state)
+            button.configure(
+                text=self._search_tag_button_text(name, next_state),
+                fg_color=color,
+                hover_color=color,
+            )
+
+    def _search_tag_button_text(self, name: str, state: int) -> str:
+        return name
+
+    def _search_tag_button_color(self, state: int):
+        if state == 1:
+            return ("#7fc97f", "#7fc97f")
+        if state == -1:
+            return ("#f28b82", "#f28b82")
+        return ("gray75", "gray75")
+
+    def _can_set_next(self, song: Song) -> bool:
+        if song.id is None or self.playback_service is None:
+            return False
+        current_song = self.playback_service.current_song()
+        return current_song is None or current_song.id != song.id
 
     def _search_artist_labels(self) -> dict[str, str]:
         labels = {"全部歌手": ""}
@@ -527,7 +636,7 @@ class SongManagementView(ctk.CTkFrame):
                     onvalue=True,
                     offvalue=False,
                     font=self.font,
-                ).grid(row=index // 3, column=index % 3, sticky="w", padx=4, pady=2)
+                ).grid(row=index // 6, column=index % 6, sticky="w", padx=8, pady=6)
             row += 1
 
     def _load_song_thumbnail_async(self, song: Song) -> None:

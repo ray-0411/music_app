@@ -29,6 +29,7 @@ class PlayerView(ctk.CTkFrame):
         self.rating_repository = rating_repository
         self.playback_service = playback_service
         self.thumbnail_service = thumbnail_service
+        self.on_playback_changed = None
         self.artist_names: dict[str, str] = {}
         self.playlist: list[Song] = []
         self.cover_images: dict[str, ctk.CTkImage] = {}
@@ -39,11 +40,13 @@ class PlayerView(ctk.CTkFrame):
         self.rating_type_var = ctk.StringVar(value="影響演算法")
         self.artist_rating_score_var = ctk.IntVar(value=5)
         self.artist_rating_type_var = ctk.StringVar(value="影響演算法")
+        self.song_volume_var = ctk.IntVar(value=100)
         self.play_order_var = ctk.StringVar(value="照順序")
         self.random_mode_var = ctk.StringVar(value="相同機率")
         self.current_rating_song_id: int | None = None
         self.song_rating_submitted_for_current_play = False
         self.artist_rating_submitted_for_current_play = False
+        self.syncing_song_volume_control = False
         self.font = base_font()
         self.button_font = button_font()
         self.title_font = title_font()
@@ -261,6 +264,21 @@ class PlayerView(ctk.CTkFrame):
             font=self.font,
         )
         self.artist_rating_status_label.grid(row=13, column=0, sticky="ew", padx=14, pady=(0, 12))
+
+        ctk.CTkLabel(self.rating_frame, text="單曲音量", anchor="w", font=self.section_font).grid(
+            row=14, column=0, sticky="ew", padx=14, pady=(8, 6)
+        )
+        self.song_volume_value_label = ctk.CTkLabel(self.rating_frame, text="100%", font=self.section_font)
+        self.song_volume_value_label.grid(row=15, column=0, sticky="ew", padx=14, pady=(0, 4))
+        self.song_volume_slider = ctk.CTkSlider(
+            self.rating_frame,
+            from_=0,
+            to=200,
+            number_of_steps=200,
+            variable=self.song_volume_var,
+            command=self.set_current_song_volume,
+        )
+        self.song_volume_slider.grid(row=16, column=0, sticky="ew", padx=14, pady=4)
 
         self.status_label = ctk.CTkLabel(self.center_frame, text="", anchor="w", font=self.font)
         self.status_label.grid(row=7, column=0, sticky="ew", padx=18, pady=(0, 12))
@@ -495,6 +513,7 @@ class PlayerView(ctk.CTkFrame):
             return
         self.play_button.configure(text="⏸" if was_playing else "▶")
         self._refresh_song_labels()
+        self._notify_playback_changed()
 
     def play_next(self) -> None:
         was_playing = self.playback_service.is_playing()
@@ -508,6 +527,7 @@ class PlayerView(ctk.CTkFrame):
             return
         self.play_button.configure(text="⏸" if was_playing else "▶")
         self._refresh_song_labels()
+        self._notify_playback_changed()
 
     def set_volume(self, value: float) -> None:
         volume = int(value)
@@ -583,6 +603,7 @@ class PlayerView(ctk.CTkFrame):
             self.artist_rating_song_label.configure(text="目前沒有歌手")
             self.artist_rating_status_label.configure(text="")
             self.submit_artist_rating_button.configure(state="disabled")
+            self._sync_song_volume_control(None)
             return
         if song.id != self.current_rating_song_id:
             self.current_rating_song_id = song.id
@@ -594,6 +615,32 @@ class PlayerView(ctk.CTkFrame):
         self.artist_rating_song_label.configure(text=f"{self._artist_name(song)}\n{song.artist_id}")
         self.artist_rating_status_label.configure(text=self._artist_rating_status_text(song.artist_id))
         self.submit_artist_rating_button.configure(state=self._artist_rating_button_state(song.artist_id))
+        self._sync_song_volume_control(song)
+
+    def _sync_song_volume_control(self, song: Song | None) -> None:
+        volume = song.song_volume_percent if song else 100
+        state = "normal" if song and song.id is not None else "disabled"
+        self.syncing_song_volume_control = True
+        self.song_volume_var.set(volume)
+        self.song_volume_slider.set(volume)
+        self.song_volume_value_label.configure(text=f"{volume}%")
+        self.song_volume_slider.configure(state=state)
+        self.syncing_song_volume_control = False
+
+    def set_current_song_volume(self, value: float) -> None:
+        volume = int(round(float(value)))
+        self.song_volume_var.set(volume)
+        self.song_volume_value_label.configure(text=f"{volume}%")
+        if self.syncing_song_volume_control:
+            return
+        song = self.playback_service.current_song()
+        if song is None or song.id is None:
+            return
+        try:
+            updated_song = self.song_repository.update_song_volume(song.id, volume)
+            self.playback_service.set_current_song_volume_percent(updated_song.song_volume_percent)
+        except Exception as exc:
+            self.set_status(str(exc), error=True)
 
     def submit_current_song_rating(self) -> None:
         song = self.playback_service.current_song()
@@ -706,6 +753,7 @@ class PlayerView(ctk.CTkFrame):
             if self.playback_service.play_next():
                 self.play_button.configure(text="⏸")
                 self._refresh_song_labels()
+                self._notify_playback_changed()
             else:
                 self.play_button.configure(text="▶")
         length_ms = self.playback_service.get_length_ms()
@@ -733,6 +781,10 @@ class PlayerView(ctk.CTkFrame):
     def set_status(self, text: str, *, error: bool = False) -> None:
         color = "#b3261e" if error else "#1b6e3c"
         self.status_label.configure(text=text, text_color=color)
+
+    def _notify_playback_changed(self) -> None:
+        if self.on_playback_changed:
+            self.on_playback_changed()
 
     def _make_default_cover(self) -> ctk.CTkImage:
         image = Image.new("RGB", PLAYER_COVER_SIZE, "#d9dee8")

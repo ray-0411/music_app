@@ -1,5 +1,6 @@
 import re
 from concurrent.futures import ThreadPoolExecutor
+from tkinter import messagebox
 
 import customtkinter as ctk
 from PIL import Image, ImageDraw
@@ -13,6 +14,7 @@ from services.thumbnail_service import ThumbnailService
 from services.youtube_service import ChannelInfo
 from services.youtube_service import YouTubeService
 from ui.fonts import base_font, button_font, large_title_font, small_title_font, title_font
+from change_artist_id import apply_change, build_change_plan
 
 ARTIST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 ARTIST_CARD_COLUMNS = 3
@@ -32,6 +34,8 @@ class ArtistView(ctk.CTkFrame):
         tag_repository: TagRepository,
         rating_repository: RatingRepository,
         on_artists_changed,
+        on_artist_id_change_start=None,
+        on_artist_id_change_finished=None,
     ) -> None:
         super().__init__(master, fg_color="transparent")
         self.artist_repository = artist_repository
@@ -40,6 +44,8 @@ class ArtistView(ctk.CTkFrame):
         self.tag_repository = tag_repository
         self.rating_repository = rating_repository
         self.on_artists_changed = on_artists_changed
+        self.on_artist_id_change_start = on_artist_id_change_start
+        self.on_artist_id_change_finished = on_artist_id_change_finished
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.channel_name_entries: dict[str, ctk.CTkEntry] = {}
         self.tag_vars: dict[int, ctk.BooleanVar] = {}
@@ -370,18 +376,35 @@ class ArtistView(ctk.CTkFrame):
         ctk.CTkLabel(self.edit_page, text=f"編輯歌手：{artist.artist_id}", font=self.bold_font).grid(
             row=0, column=0, columnspan=3, sticky="ew", padx=12, pady=(12, 8)
         )
-        ctk.CTkLabel(self.edit_page, text="頻道名稱", font=self.font).grid(
+        ctk.CTkLabel(self.edit_page, text="Artist ID", font=self.font).grid(
             row=1, column=0, sticky="w", padx=12, pady=8
+        )
+        artist_id_controls = ctk.CTkFrame(self.edit_page, fg_color="transparent")
+        artist_id_controls.grid(row=1, column=1, sticky="ew", padx=12, pady=8)
+        artist_id_controls.grid_columnconfigure(0, weight=1)
+        self.edit_artist_id_entry = ctk.CTkEntry(artist_id_controls, font=self.font)
+        self.edit_artist_id_entry.insert(0, artist.artist_id)
+        self.edit_artist_id_entry.grid(row=0, column=0, sticky="ew")
+        ctk.CTkButton(
+            artist_id_controls,
+            text="修改 ID",
+            width=112,
+            font=self.button_font,
+            command=self.change_artist_id_from_edit,
+        ).grid(row=0, column=1, sticky="e", padx=(8, 0))
+
+        ctk.CTkLabel(self.edit_page, text="頻道名稱", font=self.font).grid(
+            row=2, column=0, sticky="w", padx=12, pady=8
         )
         self.edit_channel_name_entry = ctk.CTkEntry(self.edit_page, font=self.font)
         self.edit_channel_name_entry.insert(0, artist.channel_name)
-        self.edit_channel_name_entry.grid(row=1, column=1, sticky="ew", padx=12, pady=8)
+        self.edit_channel_name_entry.grid(row=2, column=1, sticky="ew", padx=12, pady=8)
 
         ctk.CTkLabel(self.edit_page, text="標籤", font=self.bold_font).grid(
-            row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=(18, 8)
+            row=3, column=0, columnspan=2, sticky="ew", padx=12, pady=(18, 8)
         )
         selected_option_ids = self.tag_repository.get_artist_option_ids(artist.artist_id)
-        row = 3
+        row = 4
         for category in self.tag_repository.list_categories():
             options = self.tag_repository.list_options_by_category(category.id)
             category_frame = ctk.CTkFrame(self.edit_page)
@@ -470,12 +493,16 @@ class ArtistView(ctk.CTkFrame):
         if artist is None:
             return
         try:
+            old_artist_id = artist.artist_id
+            new_artist_id = self.edit_artist_id_entry.get().strip()
+            if old_artist_id.lower() != new_artist_id.lower():
+                raise ValueError("修改 Artist ID 請使用旁邊的「修改 ID」按鈕。")
             updated = self.artist_repository.update_channel_name(
                 artist.artist_id,
                 self.edit_channel_name_entry.get(),
             )
             selected = {option_id for option_id, var in self.tag_vars.items() if var.get()}
-            self.tag_repository.replace_artist_tags(artist.artist_id, selected)
+            self.tag_repository.replace_artist_tags(updated.artist_id, selected)
         except Exception as exc:
             self.set_status(str(exc), error=True)
             return
@@ -483,6 +510,45 @@ class ArtistView(ctk.CTkFrame):
         self.set_status(f"已更新歌手：{updated.artist_id} / {updated.channel_name}")
         self.on_artists_changed()
         self.show_list_page()
+
+    def change_artist_id_from_edit(self) -> None:
+        artist = self.editing_artist
+        if artist is None:
+            return
+        old_artist_id = artist.artist_id
+        new_artist_id = self.edit_artist_id_entry.get().strip()
+        if old_artist_id.lower() == new_artist_id.lower():
+            self.set_status("Artist ID 沒有變更。", error=True)
+            return
+        try:
+            plan = build_change_plan(old_artist_id, new_artist_id)
+        except Exception as exc:
+            self.set_status(str(exc), error=True)
+            return
+
+        confirmed = messagebox.askyesno(
+            "確認修改 Artist ID",
+            f"確認把 {old_artist_id} 改成 {new_artist_id}？\n\n"
+            f"會同步改名 {len(plan)} 首歌曲檔案。\n"
+            "完成後程式會關閉，請手動重新開啟。",
+        )
+        if not confirmed:
+            return
+
+        try:
+            if self.on_artist_id_change_start:
+                self.on_artist_id_change_start()
+            apply_change(old_artist_id, new_artist_id, plan)
+        except Exception as exc:
+            self.set_status(str(exc), error=True)
+            return
+
+        messagebox.showinfo(
+            "Artist ID 已修改",
+            f"{old_artist_id} 已改成 {new_artist_id}。\n程式即將關閉，請手動重新開啟。",
+        )
+        if self.on_artist_id_change_finished:
+            self.on_artist_id_change_finished(old_artist_id, new_artist_id)
 
     def submit_artist_rating(self) -> None:
         artist = self.editing_artist
