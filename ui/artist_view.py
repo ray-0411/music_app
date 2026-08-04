@@ -18,6 +18,10 @@ from change_artist_id import apply_change, build_change_plan
 
 ARTIST_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 ARTIST_CARD_COLUMNS = 3
+ARTIST_PAGE_SIZE = 12
+BULK_LIST_COLUMNS = 3
+BULK_LIST_ROWS = 12
+BULK_LIST_PAGE_SIZE = BULK_LIST_COLUMNS * BULK_LIST_ROWS
 ARTIST_CARD_WIDTH = 360
 ARTIST_CARD_HEIGHT = 132
 ARTIST_CARD_TEXT_WIDTH = 160
@@ -55,6 +59,21 @@ class ArtistView(ctk.CTkFrame):
         self.editing_artist_id: str | None = None
         self.preview_channel: ChannelInfo | None = None
         self.editing_artist: Artist | None = None
+        self.all_artists: list[Artist] = []
+        self.artists: list[Artist] = []
+        self.current_artist_page = 0
+        self.artist_search_keyword = ""
+        self.selected_artist_search_tag_id: int | None = None
+        self.artist_search_tag_labels: dict[str, int | None] = {"全部分類": None, "無": -1}
+        self.artist_search_category_option_ids: set[int] = set()
+        self.bulk_tag_labels: dict[str, int] = {}
+        self.bulk_tag_vars: dict[str, ctk.BooleanVar] = {}
+        self.selected_bulk_tag_id: int | None = None
+        self.selected_bulk_category_name = ""
+        self.bulk_tag_artists: list[Artist] = []
+        self.current_bulk_tag_page = 0
+        self.bulk_avatar_labels: dict[str, ctk.CTkLabel] = {}
+        self.bulk_list_mode_var = ctk.BooleanVar(value=False)
         self.default_avatar_image = self._make_default_avatar()
         self.preview_avatar_image = self._make_default_avatar()
         self.artist_rating_score_var = ctk.IntVar(value=5)
@@ -76,12 +95,19 @@ class ArtistView(ctk.CTkFrame):
         self.list_page = ctk.CTkFrame(self, fg_color="transparent")
         self.list_page.grid(row=0, column=0, sticky="nsew")
         self.list_page.grid_columnconfigure(0, weight=1)
-        self.list_page.grid_rowconfigure(0, weight=1)
+        self.list_page.grid_rowconfigure(0, weight=0)
+        self.list_page.grid_rowconfigure(1, weight=1)
+        self.list_page.grid_rowconfigure(2, weight=0)
 
         self.edit_page = ctk.CTkScrollableFrame(self)
         self.edit_page.grid(row=0, column=0, sticky="nsew")
         self.edit_page.grid_columnconfigure(1, weight=1)
         self.edit_page.grid_columnconfigure(2, weight=0, minsize=260)
+
+        self.bulk_tag_page = ctk.CTkFrame(self, fg_color="transparent")
+        self.bulk_tag_page.grid(row=0, column=0, sticky="nsew")
+        self.bulk_tag_page.grid_columnconfigure(0, weight=1)
+        self.bulk_tag_page.grid_rowconfigure(1, weight=1)
 
         form = ctk.CTkFrame(self.add_page)
         form.grid(row=0, column=0, sticky="nsew", padx=(8, 6), pady=8)
@@ -143,9 +169,58 @@ class ArtistView(ctk.CTkFrame):
         )
         self.preview_detail_label.grid(row=1, column=1, sticky="new", padx=(8, 18), pady=(4, 18))
 
-        self.artist_list = ctk.CTkScrollableFrame(self.list_page)
-        self.artist_list.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        self.artist_search_frame = ctk.CTkFrame(self.list_page)
+        self.artist_search_frame.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+        self.artist_search_frame.grid_columnconfigure(0, weight=1)
+        self.artist_search_frame.grid_columnconfigure(1, weight=1)
+        self.artist_search_tag_menu = ctk.CTkOptionMenu(
+            self.artist_search_frame,
+            values=list(self.artist_search_tag_labels.keys()),
+            font=self.font,
+        )
+        self.artist_search_tag_menu.grid(row=0, column=0, sticky="ew", padx=(12, 6), pady=10)
+        self.artist_search_entry = ctk.CTkEntry(self.artist_search_frame, placeholder_text="歌手名稱或 Artist ID", font=self.font)
+        self.artist_search_entry.grid(row=0, column=1, sticky="ew", padx=6, pady=10)
+        self.artist_search_entry.bind("<Return>", lambda _event: self.apply_artist_search())
+        ctk.CTkButton(
+            self.artist_search_frame,
+            text="搜尋",
+            width=84,
+            command=self.apply_artist_search,
+            font=self.button_font,
+        ).grid(row=0, column=2, padx=6, pady=10)
+        ctk.CTkButton(
+            self.artist_search_frame,
+            text="清除",
+            width=84,
+            command=self.clear_artist_search,
+            font=self.button_font,
+        ).grid(row=0, column=3, padx=(6, 12), pady=10)
+
+        self.artist_list = ctk.CTkFrame(self.list_page, fg_color="transparent")
+        self.artist_list.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
         self.artist_list.grid_columnconfigure(0, weight=1)
+        self.artist_pagination_frame = ctk.CTkFrame(self.list_page)
+        self.artist_pagination_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=(4, 8))
+        self.artist_pagination_frame.grid_columnconfigure(1, weight=1)
+        self.prev_artist_page_button = ctk.CTkButton(
+            self.artist_pagination_frame,
+            text="上一頁",
+            width=96,
+            command=self.previous_artist_page,
+            font=self.button_font,
+        )
+        self.prev_artist_page_button.grid(row=0, column=0, sticky="w", padx=10, pady=8)
+        self.artist_page_label = ctk.CTkLabel(self.artist_pagination_frame, text="", anchor="center", font=self.font)
+        self.artist_page_label.grid(row=0, column=1, sticky="ew", padx=10, pady=8)
+        self.next_artist_page_button = ctk.CTkButton(
+            self.artist_pagination_frame,
+            text="下一頁",
+            width=96,
+            command=self.next_artist_page,
+            font=self.button_font,
+        )
+        self.next_artist_page_button.grid(row=0, column=2, sticky="e", padx=10, pady=8)
         self.reload_artists()
         self.show_list_page()
 
@@ -192,12 +267,14 @@ class ArtistView(ctk.CTkFrame):
     def show_add_page(self) -> None:
         self.edit_page.grid_remove()
         self.list_page.grid_remove()
+        self.bulk_tag_page.grid_remove()
         self.add_page.grid()
 
     def show_list_page(self) -> None:
         self.reload_artists()
         self.edit_page.grid_remove()
         self.add_page.grid_remove()
+        self.bulk_tag_page.grid_remove()
         self.list_page.grid()
 
     def show_edit_page(self, artist: Artist) -> None:
@@ -205,22 +282,39 @@ class ArtistView(ctk.CTkFrame):
         self.render_edit_page()
         self.add_page.grid_remove()
         self.list_page.grid_remove()
+        self.bulk_tag_page.grid_remove()
         self.edit_page.grid()
+
+    def show_bulk_tag_page(self) -> None:
+        self.render_bulk_tag_page()
+        self.edit_page.grid_remove()
+        self.add_page.grid_remove()
+        self.list_page.grid_remove()
+        self.bulk_tag_page.grid()
 
     def reload_artists(self) -> None:
         for child in self.artist_list.winfo_children():
             child.destroy()
         self.channel_name_entries.clear()
         self.artist_avatar_labels.clear()
-        artists = self.artist_repository.list_artists()
-        if not artists:
-            ctk.CTkLabel(self.artist_list, text="尚未新增歌手", anchor="w").grid(
+        self._reload_artist_search_tag_labels()
+        self.all_artists = self.artist_repository.list_artists()
+        self.artists = self._filter_artists(self.all_artists)
+        max_page = self._max_artist_page()
+        if self.current_artist_page > max_page:
+            self.current_artist_page = max_page
+        if not self.artists:
+            empty_text = "找不到符合條件的歌手" if self.all_artists else "尚未新增歌手"
+            ctk.CTkLabel(self.artist_list, text=empty_text, anchor="w", font=self.font).grid(
                 row=0, column=0, sticky="ew", padx=8, pady=8
             )
+            self._update_artist_pagination_controls()
             return
         for column in range(ARTIST_CARD_COLUMNS):
             self.artist_list.grid_columnconfigure(column, weight=1, uniform="artist_cards")
-        for index, artist in enumerate(artists):
+        start = self.current_artist_page * ARTIST_PAGE_SIZE
+        end = start + ARTIST_PAGE_SIZE
+        for index, artist in enumerate(self.artists[start:end]):
             row = index // ARTIST_CARD_COLUMNS
             column = index % ARTIST_CARD_COLUMNS
             frame = ctk.CTkFrame(self.artist_list)
@@ -272,6 +366,432 @@ class ArtistView(ctk.CTkFrame):
                 command=lambda selected_artist=artist: self.show_edit_page(selected_artist),
                 font=self.button_font,
             ).grid(row=0, column=2, padx=(6, 10), pady=10)
+        self._update_artist_pagination_controls()
+
+    def previous_artist_page(self) -> None:
+        if self.current_artist_page <= 0:
+            return
+        self.current_artist_page -= 1
+        self.reload_artists()
+
+    def next_artist_page(self) -> None:
+        if self.current_artist_page >= self._max_artist_page():
+            return
+        self.current_artist_page += 1
+        self.reload_artists()
+
+    def _max_artist_page(self) -> int:
+        if not self.artists:
+            return 0
+        return (len(self.artists) - 1) // ARTIST_PAGE_SIZE
+
+    def _update_artist_pagination_controls(self) -> None:
+        if not self.artists:
+            self.artist_page_label.configure(text="第 0 / 0 頁")
+            self.prev_artist_page_button.configure(state="disabled")
+            self.next_artist_page_button.configure(state="disabled")
+            return
+        total_pages = self._max_artist_page() + 1
+        start = self.current_artist_page * ARTIST_PAGE_SIZE + 1
+        end = min(start + ARTIST_PAGE_SIZE - 1, len(self.artists))
+        self.artist_page_label.configure(
+            text=f"第 {self.current_artist_page + 1} / {total_pages} 頁，顯示 {start}-{end} / {len(self.artists)}"
+        )
+        self.prev_artist_page_button.configure(state="normal" if self.current_artist_page > 0 else "disabled")
+        self.next_artist_page_button.configure(
+            state="normal" if self.current_artist_page < self._max_artist_page() else "disabled"
+        )
+
+    def apply_artist_search(self) -> None:
+        self.artist_search_keyword = self.artist_search_entry.get().strip()
+        self.selected_artist_search_tag_id = self.artist_search_tag_labels.get(self.artist_search_tag_menu.get())
+        self.current_artist_page = 0
+        self.reload_artists()
+
+    def clear_artist_search(self) -> None:
+        self.artist_search_keyword = ""
+        self.selected_artist_search_tag_id = None
+        self.artist_search_entry.delete(0, "end")
+        self.artist_search_tag_menu.set("全部分類")
+        self.current_artist_page = 0
+        self.reload_artists()
+
+    def _filter_artists(self, artists: list[Artist]) -> list[Artist]:
+        keyword = self.artist_search_keyword.strip().lower()
+        tag_id = self.selected_artist_search_tag_id
+        if not keyword and tag_id is None:
+            return list(artists)
+        filtered: list[Artist] = []
+        for artist in artists:
+            if keyword and not self._artist_matches_keyword(artist, keyword):
+                continue
+            artist_option_ids = self.tag_repository.get_artist_option_ids(artist.artist_id) if tag_id is not None else set()
+            if tag_id == -1 and self.artist_search_category_option_ids.intersection(artist_option_ids):
+                continue
+            if tag_id is not None and tag_id != -1 and tag_id not in artist_option_ids:
+                continue
+            filtered.append(artist)
+        return filtered
+
+    def _artist_matches_keyword(self, artist: Artist, keyword: str) -> bool:
+        return keyword in artist.artist_id.lower() or keyword in artist.channel_name.lower()
+
+    def _reload_artist_search_tag_labels(self) -> None:
+        labels: dict[str, int | None] = {"全部分類": None, "無": -1}
+        category_option_ids: set[int] = set()
+        for category in self.tag_repository.list_categories():
+            if category.name != "搜尋分類":
+                continue
+            for option in self.tag_repository.list_options_by_category(category.id):
+                labels[option.name] = option.id
+                category_option_ids.add(option.id)
+        self.artist_search_tag_labels = labels
+        self.artist_search_category_option_ids = category_option_ids
+        if not hasattr(self, "artist_search_tag_menu"):
+            return
+        self.artist_search_tag_menu.configure(values=list(labels.keys()))
+        current_label = self._artist_search_tag_label_by_id(self.selected_artist_search_tag_id)
+        self.artist_search_tag_menu.set(current_label)
+
+    def _artist_search_tag_label_by_id(self, option_id: int | None) -> str:
+        if option_id is None:
+            return "全部分類"
+        for label, current_id in self.artist_search_tag_labels.items():
+            if current_id == option_id:
+                return label
+        self.selected_artist_search_tag_id = None
+        return "全部分類"
+
+    def render_bulk_tag_page(self) -> None:
+        for child in self.bulk_tag_page.winfo_children():
+            child.destroy()
+        self.bulk_tag_vars.clear()
+        self.bulk_avatar_labels.clear()
+        self.bulk_tag_categories = self.tag_repository.list_categories()
+
+        controls = ctk.CTkFrame(self.bulk_tag_page)
+        controls.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+        controls.grid_columnconfigure(0, weight=1)
+        controls.grid_columnconfigure(1, weight=1)
+        controls.grid_columnconfigure(3, weight=1)
+        category_labels = [category.name for category in self.bulk_tag_categories] or ["尚無上層標籤"]
+        self.bulk_category_menu = ctk.CTkOptionMenu(
+            controls,
+            values=category_labels,
+            command=self._bulk_category_selected,
+            font=self.font,
+        )
+        self.bulk_category_menu.set(self._bulk_category_label())
+        self.bulk_category_menu.grid(row=0, column=0, sticky="ew", padx=(12, 6), pady=10)
+        self.bulk_tag_labels = self._bulk_option_labels_for_selected_category()
+        option_values = list(self.bulk_tag_labels.keys()) or ["尚無下層標籤"]
+        self.bulk_tag_menu = ctk.CTkOptionMenu(
+            controls,
+            values=option_values,
+            command=self._bulk_tag_selected,
+            font=self.font,
+        )
+        self.bulk_tag_menu.set(self._bulk_tag_label_by_id(self.selected_bulk_tag_id, option_values[0]))
+        self.bulk_tag_menu.grid(row=0, column=1, sticky="ew", padx=6, pady=10)
+        ctk.CTkButton(
+            controls,
+            text="儲存",
+            width=96,
+            command=self.save_bulk_artist_tags,
+            font=self.button_font,
+        ).grid(row=0, column=2, padx=6, pady=10)
+        self.bulk_tag_status_label = ctk.CTkLabel(controls, text="", anchor="w", font=self.font)
+        self.bulk_tag_status_label.grid(row=0, column=3, sticky="ew", padx=(6, 12), pady=10)
+        ctk.CTkCheckBox(
+            controls,
+            text="清單模式",
+            variable=self.bulk_list_mode_var,
+            command=self.render_bulk_artist_cards,
+            font=self.font,
+        ).grid(row=0, column=4, sticky="e", padx=(6, 12), pady=10)
+
+        body_shell = ctk.CTkFrame(self.bulk_tag_page, fg_color="transparent")
+        body_shell.grid(row=1, column=0, sticky="nsew")
+        body_shell.grid_columnconfigure(0, weight=1)
+        body_shell.grid_rowconfigure(0, weight=1)
+        self.bulk_tag_body = ctk.CTkFrame(body_shell, fg_color="transparent")
+        self.bulk_tag_body.grid(row=0, column=0, sticky="nsew", padx=8, pady=(0, 4))
+        for column in range(ARTIST_CARD_COLUMNS):
+            self.bulk_tag_body.grid_columnconfigure(column, weight=1, uniform="bulk_artist_cards")
+        self.bulk_pagination_frame = ctk.CTkFrame(body_shell)
+        self.bulk_pagination_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=(4, 8))
+        self.bulk_pagination_frame.grid_columnconfigure(1, weight=1)
+        self.prev_bulk_page_button = ctk.CTkButton(
+            self.bulk_pagination_frame,
+            text="上一頁",
+            width=96,
+            command=self.previous_bulk_tag_page,
+            font=self.button_font,
+        )
+        self.prev_bulk_page_button.grid(row=0, column=0, sticky="w", padx=10, pady=8)
+        self.bulk_page_label = ctk.CTkLabel(self.bulk_pagination_frame, text="", anchor="center", font=self.font)
+        self.bulk_page_label.grid(row=0, column=1, sticky="ew", padx=10, pady=8)
+        self.next_bulk_page_button = ctk.CTkButton(
+            self.bulk_pagination_frame,
+            text="下一頁",
+            width=96,
+            command=self.next_bulk_tag_page,
+            font=self.button_font,
+        )
+        self.next_bulk_page_button.grid(row=0, column=2, sticky="e", padx=10, pady=8)
+        if self.selected_bulk_tag_id is None and self.bulk_tag_labels:
+            self.selected_bulk_tag_id = self.bulk_tag_labels.get(self.bulk_tag_menu.get())
+        if self.selected_bulk_tag_id is not None:
+            self._load_bulk_tag_artist_states(self.selected_bulk_tag_id)
+        self.render_bulk_artist_cards()
+
+    def save_bulk_artist_tags(self) -> None:
+        option_id = self.selected_bulk_tag_id
+        if option_id is None:
+            self._set_bulk_tag_status("請先選擇可用的下層標籤。", error=True)
+            return
+        try:
+            for artist_id, var in self.bulk_tag_vars.items():
+                self.tag_repository.set_artist_tag(artist_id, option_id, bool(var.get()))
+        except Exception as exc:
+            self._set_bulk_tag_status(str(exc), error=True)
+            return
+        self._set_bulk_tag_status(f"已批量更新標籤：{self._bulk_tag_label_by_id(option_id, '')}")
+        self.reload_artists()
+
+    def confirm_bulk_artist_tag(self) -> None:
+        option_id = self.bulk_tag_labels.get(self.bulk_tag_menu.get()) if hasattr(self, "bulk_tag_menu") else None
+        if option_id is None:
+            self._set_bulk_tag_status("請先選擇可用的下層標籤。", error=True)
+            self.bulk_tag_artists = []
+            self.bulk_tag_vars.clear()
+            self.render_bulk_artist_cards()
+            return
+        self.selected_bulk_tag_id = option_id
+        self.current_bulk_tag_page = 0
+        self._load_bulk_tag_artist_states(option_id)
+        self._set_bulk_tag_status("已載入")
+        self.render_bulk_artist_cards()
+
+    def _load_bulk_tag_artist_states(self, option_id: int) -> None:
+        self.bulk_tag_artists = self.artist_repository.list_artists()
+        self.bulk_tag_vars.clear()
+        for artist in self.bulk_tag_artists:
+            option_ids = self.tag_repository.get_artist_option_ids(artist.artist_id)
+            self.bulk_tag_vars[artist.artist_id] = ctk.BooleanVar(value=option_id in option_ids)
+
+    def render_bulk_artist_cards(self) -> None:
+        if not hasattr(self, "bulk_tag_body"):
+            return
+        for child in self.bulk_tag_body.winfo_children():
+            child.destroy()
+        self.bulk_avatar_labels.clear()
+        if self.selected_bulk_tag_id is None:
+            ctk.CTkLabel(self.bulk_tag_body, text="請選擇可用的下層標籤。", anchor="w", font=self.font).grid(
+                row=0, column=0, sticky="ew", padx=12, pady=12
+            )
+            self._update_bulk_pagination_controls()
+            return
+        if not self.bulk_tag_artists:
+            ctk.CTkLabel(self.bulk_tag_body, text="尚未新增歌手。", anchor="w", font=self.font).grid(
+                row=0, column=0, sticky="ew", padx=12, pady=12
+            )
+            self._update_bulk_pagination_controls()
+            return
+        max_page = self._max_bulk_tag_page()
+        if self.current_bulk_tag_page > max_page:
+            self.current_bulk_tag_page = max_page
+        page_size = self._bulk_tag_page_size()
+        start = self.current_bulk_tag_page * page_size
+        end = start + page_size
+        if self.bulk_list_mode_var.get():
+            self._render_bulk_artist_list(self.bulk_tag_artists[start:end])
+            self._update_bulk_pagination_controls()
+            return
+        for index, artist in enumerate(self.bulk_tag_artists[start:end]):
+            row = index // ARTIST_CARD_COLUMNS
+            column = index % ARTIST_CARD_COLUMNS
+            frame = ctk.CTkFrame(self.bulk_tag_body)
+            frame.grid(row=row, column=column, sticky="nsew", padx=6, pady=6)
+            frame.configure(width=ARTIST_CARD_WIDTH, height=ARTIST_CARD_HEIGHT)
+            frame.grid_propagate(False)
+            frame.grid_columnconfigure(2, weight=1)
+            frame.grid_rowconfigure(0, weight=1)
+
+            var = self.bulk_tag_vars.get(artist.artist_id)
+            if var is None:
+                var = ctk.BooleanVar(value=False)
+                self.bulk_tag_vars[artist.artist_id] = var
+            ctk.CTkCheckBox(frame, text="", variable=var, width=28).grid(
+                row=0, column=0, padx=(10, 4), pady=10
+            )
+
+            avatar_label = ctk.CTkLabel(frame, image=self.default_avatar_image, text="")
+            avatar_label.grid(row=0, column=1, padx=(4, 8), pady=10)
+            self.bulk_avatar_labels[artist.artist_id] = avatar_label
+            if artist.artist_id in self.artist_avatar_images:
+                avatar_label.configure(image=self.artist_avatar_images[artist.artist_id])
+            else:
+                image = self.thumbnail_service.get_existing_channel_avatar(artist.channel_id)
+                if image is not None:
+                    photo = ctk.CTkImage(light_image=image, dark_image=image, size=CHANNEL_AVATAR_SIZE)
+                    self.artist_avatar_images[artist.artist_id] = photo
+                    avatar_label.configure(image=photo)
+                else:
+                    self._load_artist_avatar_async(artist)
+
+            text_frame = ctk.CTkFrame(frame, fg_color="transparent")
+            text_frame.grid(row=0, column=2, sticky="ew", padx=6, pady=10)
+            text_frame.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(
+                text_frame,
+                text=artist.channel_name,
+                anchor="w",
+                wraplength=ARTIST_CARD_TEXT_WIDTH,
+                font=self.font,
+            ).grid(row=0, column=0, sticky="ew")
+            ctk.CTkLabel(
+                text_frame,
+                text=artist.artist_id,
+                anchor="w",
+                wraplength=ARTIST_CARD_TEXT_WIDTH,
+                font=self.font,
+            ).grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._update_bulk_pagination_controls()
+
+    def _render_bulk_artist_list(self, artists: list[Artist]) -> None:
+        for column in range(BULK_LIST_COLUMNS):
+            self.bulk_tag_body.grid_columnconfigure(column, weight=1, uniform="bulk_artist_list")
+        for index, artist in enumerate(artists):
+            var = self.bulk_tag_vars.get(artist.artist_id)
+            if var is None:
+                var = ctk.BooleanVar(value=False)
+                self.bulk_tag_vars[artist.artist_id] = var
+            row_frame = ctk.CTkFrame(self.bulk_tag_body)
+            row_frame.grid(
+                row=index % BULK_LIST_ROWS,
+                column=index // BULK_LIST_ROWS,
+                sticky="ew",
+                padx=6,
+                pady=3,
+            )
+            row_frame.grid_columnconfigure(2, weight=1)
+            ctk.CTkCheckBox(row_frame, text="", variable=var, width=28).grid(
+                row=0, column=0, padx=(10, 8), pady=8
+            )
+            ctk.CTkLabel(
+                row_frame,
+                text=self._artist_search_category_text(artist),
+                width=96,
+                anchor="w",
+                font=self.font,
+            ).grid(row=0, column=1, sticky="w", padx=8, pady=8)
+            ctk.CTkLabel(
+                row_frame,
+                text=artist.channel_name,
+                anchor="w",
+                font=self.font,
+            ).grid(row=0, column=2, sticky="ew", padx=8, pady=8)
+
+    def _artist_search_category_text(self, artist: Artist) -> str:
+        option_ids = self.tag_repository.get_artist_option_ids(artist.artist_id)
+        names: list[str] = []
+        for category in self.tag_repository.list_categories():
+            if category.name != "搜尋分類":
+                continue
+            for option in self.tag_repository.list_options_by_category(category.id):
+                if option.id in option_ids:
+                    names.append(option.name)
+        return "、".join(names) if names else "無"
+
+    def previous_bulk_tag_page(self) -> None:
+        if self.current_bulk_tag_page <= 0:
+            return
+        self.current_bulk_tag_page -= 1
+        self.render_bulk_artist_cards()
+
+    def next_bulk_tag_page(self) -> None:
+        if self.current_bulk_tag_page >= self._max_bulk_tag_page():
+            return
+        self.current_bulk_tag_page += 1
+        self.render_bulk_artist_cards()
+
+    def _max_bulk_tag_page(self) -> int:
+        if not self.bulk_tag_artists:
+            return 0
+        return (len(self.bulk_tag_artists) - 1) // self._bulk_tag_page_size()
+
+    def _bulk_tag_page_size(self) -> int:
+        return BULK_LIST_PAGE_SIZE if self.bulk_list_mode_var.get() else ARTIST_PAGE_SIZE
+
+    def _update_bulk_pagination_controls(self) -> None:
+        if not hasattr(self, "bulk_page_label"):
+            return
+        if not self.bulk_tag_artists:
+            self.bulk_page_label.configure(text="第 0 / 0 頁")
+            self.prev_bulk_page_button.configure(state="disabled")
+            self.next_bulk_page_button.configure(state="disabled")
+            return
+        total_pages = self._max_bulk_tag_page() + 1
+        page_size = self._bulk_tag_page_size()
+        start = self.current_bulk_tag_page * page_size + 1
+        end = min(start + page_size - 1, len(self.bulk_tag_artists))
+        self.bulk_page_label.configure(
+            text=f"第 {self.current_bulk_tag_page + 1} / {total_pages} 頁，顯示 {start}-{end} / {len(self.bulk_tag_artists)}"
+        )
+        self.prev_bulk_page_button.configure(state="normal" if self.current_bulk_tag_page > 0 else "disabled")
+        self.next_bulk_page_button.configure(
+            state="normal" if self.current_bulk_tag_page < self._max_bulk_tag_page() else "disabled"
+        )
+
+    def _bulk_category_selected(self, label: str) -> None:
+        self.selected_bulk_category_name = label
+        self.selected_bulk_tag_id = None
+        self.render_bulk_tag_page()
+
+    def _bulk_option_labels_for_selected_category(self) -> dict[str, int]:
+        selected_category_name = self.bulk_category_menu.get() if hasattr(self, "bulk_category_menu") else ""
+        labels: dict[str, int] = {}
+        for category in self.bulk_tag_categories:
+            if category.name != selected_category_name:
+                continue
+            for option in self.tag_repository.list_options_by_category(category.id):
+                labels[option.name] = option.id
+            break
+        return labels
+
+    def _bulk_category_label(self) -> str:
+        if self.selected_bulk_category_name:
+            for category in self.bulk_tag_categories:
+                if category.name == self.selected_bulk_category_name:
+                    return category.name
+        if self.selected_bulk_tag_id is not None:
+            for category in self.bulk_tag_categories:
+                option_ids = {
+                    option.id for option in self.tag_repository.list_options_by_category(category.id)
+                }
+                if self.selected_bulk_tag_id in option_ids:
+                    return category.name
+        return self.bulk_tag_categories[0].name if self.bulk_tag_categories else "尚無上層標籤"
+
+    def _bulk_tag_selected(self, label: str) -> None:
+        self.confirm_bulk_artist_tag()
+
+    def _bulk_tag_label_by_id(self, option_id: int | None, fallback: str) -> str:
+        if option_id is None:
+            return fallback
+        for label, current_id in self.bulk_tag_labels.items():
+            if current_id == option_id:
+                return label
+        self.selected_bulk_tag_id = None
+        if self.bulk_tag_labels:
+            self.selected_bulk_tag_id = self.bulk_tag_labels.get(fallback)
+        return fallback
+
+    def _set_bulk_tag_status(self, text: str, *, error: bool = False) -> None:
+        color = "#b3261e" if error else "#1b6e3c"
+        if hasattr(self, "bulk_tag_status_label"):
+            self.bulk_tag_status_label.configure(text=text, text_color=color)
 
     def _load_artist_avatar_async(self, artist) -> None:
         if artist.artist_id in self.avatar_requests and artist.artist_id not in self.artist_avatar_images:
@@ -303,9 +823,11 @@ class ArtistView(ctk.CTkFrame):
         photo = ctk.CTkImage(light_image=image, dark_image=image, size=CHANNEL_AVATAR_SIZE)
         self.artist_avatar_images[artist_id] = photo
         label = self.artist_avatar_labels.get(artist_id)
-        if label is None:
-            return
-        label.configure(image=photo)
+        if label is not None:
+            label.configure(image=photo)
+        bulk_label = self.bulk_avatar_labels.get(artist_id)
+        if bulk_label is not None:
+            bulk_label.configure(image=photo)
 
     def preview_channel_info(self) -> None:
         url = self.url_entry.get().strip()

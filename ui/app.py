@@ -184,7 +184,7 @@ class App(ctk.CTk):
             },
             "artists": {
                 "label": "歌手管理",
-                "subnav": [("歌手清單", "artists:list"), ("新增歌手", "artists:add")],
+                "subnav": [("歌手清單", "artists:list"), ("批量標籤", "artists:bulk_tags"), ("新增歌手", "artists:add")],
             },
             "songs": {
                 "label": "歌曲管理",
@@ -270,7 +270,12 @@ class App(ctk.CTk):
 
     def show_page(self, page_key: str) -> None:
         if page_key.startswith("artists:"):
-            self.artist_view.show_add_page() if page_key.endswith(":add") else self.artist_view.show_list_page()
+            if page_key.endswith(":add"):
+                self.artist_view.show_add_page()
+            elif page_key.endswith(":bulk_tags"):
+                self.artist_view.show_bulk_tag_page()
+            else:
+                self.artist_view.show_list_page()
             page_key = "artists"
         if page_key.startswith("player:"):
             if page_key.endswith(":preferences"):

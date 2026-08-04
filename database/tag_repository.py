@@ -336,6 +336,35 @@ class TagRepository:
                     (artist_id, row["category_id"], option_id),
                 )
 
+    def set_artist_tag(self, artist_id: str, option_id: int, enabled: bool) -> None:
+        with get_connection() as connection:
+            row = connection.execute(
+                """
+                SELECT category_id
+                FROM tag_options
+                WHERE id = ? AND is_available = 1
+                """,
+                (option_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("找不到可用的歌手標籤。")
+            if enabled:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO artist_tags (artist_id, category_id, option_id)
+                    VALUES (?, ?, ?)
+                    """,
+                    (artist_id, row["category_id"], option_id),
+                )
+            else:
+                connection.execute(
+                    """
+                    DELETE FROM artist_tags
+                    WHERE artist_id = ? COLLATE NOCASE AND option_id = ?
+                    """,
+                    (artist_id, option_id),
+                )
+
     def replace_song_tags(self, song_id: int, option_ids: set[int]) -> None:
         with get_connection() as connection:
             connection.execute("DELETE FROM song_tags WHERE song_id = ?", (song_id,))
